@@ -3,42 +3,58 @@ import ctypes
 import os
 import sys
 import tempfile
+import re
+import threading
 from ctypes import wintypes
 
 user32 = ctypes.windll.user32
 ole32 = ctypes.windll.ole32
-ole32.CoInitialize(None)
+user32.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+user32.LoadImageW.restype = wintypes.HICON
+user32.DestroyIcon.argtypes = [wintypes.HICON]
+user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+user32.SendMessageW.restype = wintypes.LPARAM
 
 CLSID_TaskbarList = (ctypes.c_ubyte * 16).from_buffer_copy(
     bytes.fromhex("44F3FD56" "6DFD" "d011" "958A006097C9A090"))
 IID_ITaskbarList3 = (ctypes.c_ubyte * 16).from_buffer_copy(
     bytes.fromhex("91FB1AEA" "289E" "864B" "90E99E9F8A5EEFAF"))
 
-_tb = ctypes.c_void_p()
-hr = ole32.CoCreateInstance(ctypes.byref(CLSID_TaskbarList), None, 1, ctypes.byref(IID_ITaskbarList3), ctypes.byref(_tb))
-_vtbl = ctypes.cast(ctypes.cast(_tb, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p)) if hr == 0 else None
+_thread = threading.local()
+
+
+def _taskbar():
+    if not hasattr(_thread, "tb"):
+        ole32.CoInitialize(None)
+        pointer = ctypes.c_void_p()
+        hr = ole32.CoCreateInstance(ctypes.byref(CLSID_TaskbarList), None, 1, ctypes.byref(IID_ITaskbarList3), ctypes.byref(pointer))
+        _thread.tb = pointer if hr == 0 else None
+        if _thread.tb:
+            vt = ctypes.cast(ctypes.cast(pointer, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
+            ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p)(vt[3])(pointer)
+    return _thread.tb
 
 
 def _call(index, restype, argtypes, *args):
-    fn = ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(_vtbl[index])
-    return fn(_tb, *args)
+    pointer = _taskbar()
+    if not pointer:
+        return None
+    vt = ctypes.cast(ctypes.cast(pointer, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
+    fn = ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(vt[index])
+    return fn(pointer, *args)
 
 
-if _vtbl:
-    _call(3, ctypes.c_long, [])  # HrInit
-
-
-def find_window(title_part="Chat inbox"):
+def find_window(title_part=None):
     found = []
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def cb(hwnd, _):
         cls = ctypes.create_unicode_buffer(64)
         user32.GetClassNameW(hwnd, cls, 64)
-        if cls.value == "Chrome_WidgetWin_1" and user32.IsWindowVisible(hwnd) or cls.value == "Chrome_WidgetWin_1" and user32.IsIconic(hwnd):
+        if cls.value == "Chrome_WidgetWin_1" and (user32.IsWindowVisible(hwnd) or user32.IsIconic(hwnd)):
             buf = ctypes.create_unicode_buffer(256)
             user32.GetWindowTextW(hwnd, buf, 256)
-            if title_part in buf.value and "localhost" not in buf.value:
+            if (title_part and title_part in buf.value) or (not title_part and re.fullmatch(r"(?:\(\d+\) )?(?:Agent Manager|Chat inbox)", buf.value)):
                 found.append(hwnd)
         return True
 
@@ -48,7 +64,7 @@ def find_window(title_part="Chat inbox"):
 
 def set_badge(hwnd, image, label):
     """image: PIL RGBA image or None to clear."""
-    if not _vtbl or not hwnd:
+    if not _taskbar() or not hwnd:
         return
     hicon = None
     if image is not None:
@@ -56,6 +72,8 @@ def set_badge(hwnd, image, label):
         image.save(path, format="ICO", sizes=[(32, 32)])
         hicon = user32.LoadImageW(None, path, 1, 32, 32, 0x10)  # IMAGE_ICON, LR_LOADFROMFILE
     _call(18, ctypes.c_long, [wintypes.HWND, wintypes.HICON, wintypes.LPCWSTR], hwnd, hicon, label)
+    if hicon:
+        user32.DestroyIcon(hicon)
 
 
 # ---- window identity: our own icon, name and relaunch command so pinning keeps the logo instead of Chrome's ----
@@ -88,6 +106,7 @@ def brand_window(hwnd, chrome, url, profile, ico):
     """Give the window our icon (WM_SETICON) and AppUserModel properties. Done once per window handle."""
     if not hwnd or _branded.get(hwnd):
         return
+    _taskbar()  # initialize COM on the thread that owns the property-store calls
     for size, which in ((32, 1), (16, 0)):
         h = user32.LoadImageW(None, ico, 1, size, size, 0x10)
         if h:
@@ -100,8 +119,11 @@ def brand_window(hwnd, chrome, url, profile, ico):
         _set_str(store, 5, "ChatInbox.App")
         _set_str(store, 2, cmd)
         _set_str(store, 3, ico + ",0")
-        _set_str(store, 4, "Chat Inbox")
+        _set_str(store, 4, "Agent Manager")
         commit = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p)(
             ctypes.cast(ctypes.cast(store, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))[7])
         commit(store)
+        release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(
+            ctypes.cast(ctypes.cast(store, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))[2])
+        release(store)
     _branded[hwnd] = True

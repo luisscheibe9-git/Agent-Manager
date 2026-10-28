@@ -6,17 +6,22 @@ import subprocess
 import sys
 import threading
 import time
+import shutil
 from http.server import ThreadingHTTPServer
+from ctypes import wintypes
 
 import pystray
 from PIL import Image, ImageDraw, ImageFont
 
 import inbox
 import taskbar
+import dashboard
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CHROME = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+CHROME = shutil.which("chrome") or r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 URL = f"http://localhost:{inbox.PORT}"
+PROFILE = os.path.join(inbox.DATA_DIR, "chrome_profile")
+WINDOW_TITLE = os.environ.get("AGENT_MANAGER_LABEL")
 BASE = Image.open(os.path.join(HERE, "inbox.ico")).convert("RGBA")  # largest entry
 if BASE.size[0] < 128:
     BASE = Image.open(os.path.join(HERE, "inbox_512.png")).convert("RGBA")
@@ -37,22 +42,25 @@ def with_badge(n):
     return im
 
 
-keep_open = [True]
+keep_open = [dashboard.settings()["keep_taskbar"]]
+STOP = threading.Event()
+restart_requested = [False]
 
 
 def toggle_keep(icon, item):
     keep_open[0] = not keep_open[0]
+    dashboard.update_settings({"keep_taskbar": keep_open[0]})
 
 
 def open_window(*_):
     """Focus the existing inbox window, or start one. Never opens a second window."""
-    hwnd = taskbar.find_window()
+    hwnd = taskbar.find_window(WINDOW_TITLE)
     if hwnd:
         taskbar.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
         taskbar.user32.SetForegroundWindow(hwnd)
         return
     last_open[0] = time.time()
-    subprocess.Popen([CHROME, f"--app={URL}", f"--user-data-dir={os.path.join(HERE, 'chrome_profile')}"])
+    subprocess.Popen([CHROME, f"--app={URL}", f"--user-data-dir={PROFILE}"])
 
 
 def mark_all(icon, *_):
@@ -74,18 +82,18 @@ def badge_only(n):
 
 
 def window_open():
-    return taskbar.find_window() is not None
+    return taskbar.find_window(WINDOW_TITLE) is not None
 
 
 def open_minimized():
     si = subprocess.STARTUPINFO()
     si.dwFlags = subprocess.STARTF_USESHOWWINDOW
     si.wShowWindow = 7  # SW_SHOWMINNOACTIVE
-    subprocess.Popen([CHROME, f"--app={URL}", f"--user-data-dir={os.path.join(HERE, 'chrome_profile')}"], startupinfo=si)
+    subprocess.Popen([CHROME, f"--app={URL}", f"--user-data-dir={PROFILE}"], startupinfo=si)
 
 
 last_open = [0.0]
-server = {"thread": None}
+server = {"thread": None, "http": None}
 
 
 def start_server():
@@ -97,38 +105,53 @@ def start_server():
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
     server["thread"] = t
+    server["http"] = srv
     inbox.log("server started")
 
 
 def refresh(icon):
-    n = inbox.unread_count()
+    data = dashboard.snapshot()
+    n = data["counts"]["needs"] + data["counts"]["unread"]
     icon.icon = with_badge(n)
-    icon.title = f"Chat inbox: {n} unread" if n else "Chat inbox: all caught up"
-    hwnd = taskbar.find_window()
+    icon.title = f"Agent Manager: {n} need attention" if n else "Agent Manager: all caught up"
+    hwnd = taskbar.find_window(WINDOW_TITLE)
     if hwnd is None:
         pass  # window closed on purpose: stay closed; the tray icon still carries the count
     else:
         taskbar.set_badge(hwnd, badge_only(n) if n else None, f"{n} unread")
-        taskbar.brand_window(hwnd, CHROME, URL, os.path.join(HERE, "chrome_profile"), os.path.join(HERE, "inbox.ico"))
+        taskbar.brand_window(hwnd, CHROME, URL, PROFILE, os.path.join(HERE, "inbox.ico"))
 
 
 def loop(icon):
     icon.visible = True
-    while icon.visible:
+    while icon.visible and not STOP.is_set():
         try:
             t = server["thread"]
             if t is None or not t.is_alive():
                 start_server()  # watchdog: the server must always be up
             refresh(icon)
+            dashboard.notify_due(icon.notify)
+            keep_open[0] = dashboard.settings()["keep_taskbar"]
         except Exception as e:  # never let the loop die
             inbox.log("tray loop error: " + repr(e))
-        time.sleep(10)
+        STOP.wait(5)
+
+
+_mutex = None
 
 
 def already_running():
     """Single instance: a named mutex, so Task Scheduler can relaunch freely without duplicates."""
-    ctypes.windll.kernel32.CreateMutexW(None, False, "ChatInboxTrayMutex")
-    return ctypes.windll.kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
+    global _mutex
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.CreateMutexW.restype = wintypes.HANDLE
+    name = "ChatInboxTrayMutex" if inbox.PORT == 8765 else f"AgentManagerTray{inbox.PORT}"
+    _mutex = kernel32.CreateMutexW(None, False, name)
+    error = ctypes.get_last_error()
+    if not _mutex:
+        raise ctypes.WinError(error)
+    return error == 183  # ERROR_ALREADY_EXISTS
 
 
 if __name__ == "__main__":
@@ -142,6 +165,11 @@ if __name__ == "__main__":
         sys.exit()
     start_server()
     inbox.ON_OPEN = open_window
+    def control(command):
+        restart_requested[0] = command == "restart"
+        STOP.set()
+        icon.stop()
+    inbox.ON_CONTROL = control
     if "--open" in sys.argv:
         open_window()
     elif keep_open[0]:
@@ -150,6 +178,20 @@ if __name__ == "__main__":
         pystray.MenuItem("Open inbox", open_window, default=True),
         pystray.MenuItem("Mark all read", mark_all),
         pystray.MenuItem("Keep in taskbar", toggle_keep, checked=lambda item: keep_open[0]),
-        pystray.MenuItem("Quit", lambda icon, *_: icon.stop()),
+        pystray.MenuItem("Restart", lambda icon, *_: control("restart")),
+        pystray.MenuItem("Quit", lambda icon, *_: control("quit")),
     )
-    pystray.Icon("chat-inbox", with_badge(0), "Chat inbox", menu).run(setup=loop)
+    icon = pystray.Icon("agent-manager", with_badge(0), "Agent Manager", menu)
+    inbox.ON_NOTIFY = icon.notify
+    icon.run(setup=loop)
+    STOP.set()
+    if server["http"]:
+        server["http"].shutdown()
+        server["http"].server_close()
+    if _mutex:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle(_mutex)
+    if restart_requested[0]:
+        subprocess.Popen([sys.executable, os.path.join(HERE, "tray.py"), "--open"],
+                         creationflags=subprocess.CREATE_NO_WINDOW)

@@ -2,40 +2,64 @@
 
 Run:  python inbox.py          (serves http://localhost:8765 and opens it)
 Unread = the chat has new activity since you last clicked "Mark read".
-Read state lives in the browser (localStorage), so no hooks or config are needed.
+Chat catalog, read marks and pins are saved locally and survive restarts.
 """
 import glob
 import html
 import json
 import os
+import re
 import shutil
+import sqlite3
 import sys
+import tempfile
 import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from functools import wraps
+from contextlib import closing
+from urllib.parse import urlsplit, parse_qs
 
-HOME = os.path.expanduser("~")
-DAYS = 30         # how far back to scan
+from catalog import Catalog
+import telemetry
+
+HOME = os.environ.get("AGENT_MANAGER_HOME", os.path.expanduser("~"))
 SETTLE_DAYS = 7   # idle longer than this and not pinned -> settled (collapsed, not counted)
 WORKING_SECS = 90  # modified this recently = probably still working
 REPLY_SECS = 1200  # after you reply, count as working this long
-PORT = 8765
+PORT = int(os.environ.get("AGENT_MANAGER_PORT", "8765"))
+DATA_DIR = os.environ.get("AGENT_MANAGER_DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
+os.makedirs(DATA_DIR, exist_ok=True)
+CATALOG = os.path.join(DATA_DIR, "chat_catalog.sqlite3")
+DATA_LOCK = threading.RLock()
+
+
+def locked(fn):
+    @wraps(fn)
+    def call(*args, **kwargs):
+        with DATA_LOCK:
+            return fn(*args, **kwargs)
+    return call
 
 
 def write_json(path, obj):
     """Atomic write: temp file -> fsync -> replace, keeping the previous version as .bak."""
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf8") as f:
-        json.dump(obj, f)
-        f.flush()
-        os.fsync(f.fileno())
-    if os.path.exists(path):
-        try:
-            shutil.copy2(path, path + ".bak")
-        except OSError:
-            pass
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf8") as f:
+            json.dump(obj, f)
+            f.flush()
+            os.fsync(f.fileno())
+        if os.path.exists(path):
+            try:
+                shutil.copy2(path, path + ".bak")
+            except OSError:
+                pass
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 def read_json(path, default):
@@ -70,98 +94,265 @@ def log(msg):
 def text_of(content):
     if isinstance(content, str):
         return content
-    return "\n".join(b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text")
+    return "\n".join(b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") in ("text", "input_text", "output_text"))
 
 
-def scan_claude(cutoff):
-    claude_links()  # refresh META
+def canonical_id(sid):
+    match = re.search(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$", sid)
+    return match.group(0) if match else sid
+
+
+def codex_metadata():
+    """Read titles/current folders from the app when available; logs still work alone."""
+    meta = {}
+    for line in safe_lines(os.path.join(HOME, ".codex", "session_index.jsonl")):
+        try:
+            row = json.loads(line)
+            meta[row["id"]] = {"title": row.get("thread_name")}
+        except (ValueError, KeyError, TypeError):
+            continue
+    paths = glob.glob(os.path.join(HOME, ".codex", "state_*.sqlite"))
+    paths.sort(key=lambda p: int(re.search(r"state_(\d+)", p).group(1)), reverse=True)
+    for path in paths:
+        try:
+            from pathlib import Path
+            with closing(sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
+                columns = {row[1] for row in db.execute("PRAGMA table_info(threads)")}
+                wanted = [c for c in ("id", "title", "cwd", "archived", "git_branch", "git_origin_url", "tokens_used") if c in columns]
+                if "id" not in wanted:
+                    continue
+                for values in db.execute("SELECT " + ",".join(wanted) + " FROM threads"):
+                    row = dict(zip(wanted, values))
+                    meta.setdefault(row["id"], {}).update(row)
+            break
+        except (sqlite3.Error, OSError):
+            continue
+    return meta
+
+
+def scan_claude(cutoff, catalog=None):
     out = []
     for p in glob.glob(os.path.join(HOME, ".claude", "projects", "*", "*.jsonl")):
         try:
-            mt = os.path.getmtime(p)
+            stat = os.stat(p)
+            mt = stat.st_mtime
         except OSError:  # path too long on Windows
             continue
         if mt < cutoff:
             continue
-        title = first_user = last = cwd = role = None
-        for line in safe_lines(p):
-            try:
-                o = json.loads(line)
-            except ValueError:
-                continue
-            t = o.get("type")
-            if t == "custom-title":
-                title = o.get("customTitle") or title
-            if o.get("isSidechain"):
-                continue
-            cwd = o.get("cwd") or cwd
-            msg = o.get("message") or {}
-            if t == "user" and not o.get("isMeta"):
-                s = text_of(msg.get("content")).strip()
-                if s and not s.startswith("<"):
-                    first_user = first_user or s
-                    role = "user"  # you replied: the chat is no longer waiting on you
-            elif t == "assistant":
-                s = text_of(msg.get("content")).strip()
-                if s:
-                    last = s
-                    role = "assistant"
+        cached = catalog.cached_file(p, stat) if catalog else None
+        if cached and cached.get("parser_version") != 2:
+            cached = None
+        if cached is None:
+            extra = telemetry.empty()
+            title = first_user = last = cwd = role = None
+            for line in safe_lines(p):
+                try:
+                    o = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(o, dict):
+                    continue
+                telemetry.claude(o, extra)
+                t = o.get("type")
+                if t == "custom-title":
+                    title = o.get("customTitle") or title
+                if o.get("isSidechain"):
+                    continue
+                cwd = o.get("cwd") or cwd
+                msg = o.get("message") or {}
+                if t == "user" and not o.get("isMeta"):
+                    s = text_of(msg.get("content")).strip()
+                    if s and not s.startswith("<"):
+                        first_user = first_user or s
+                        role = "user"
+                elif t == "assistant":
+                    s = text_of(msg.get("content")).strip()
+                    if s:
+                        last = s
+                        role = "assistant"
+            if not (title or first_user or last):
+                continue  # empty/locked/partially written source: retain the saved entry
+            cached = {"title": title or (first_user or "(untitled)")[:80],
+                      "last": (last or "")[:16000], "cwd": cwd, "role": role,
+                      "extra": telemetry.finish(extra), "parser_version": 2}
+            if catalog:
+                catalog.cache_file(p, stat, cached)
         sid = os.path.basename(p)[:-6]
         meta = META.get(sid)
-        if meta is None or meta.get("isArchived"):
-            continue  # not a desktop-app chat, or archived: the app's sidebar doesn't list it either
+        if meta and meta.get("isArchived"):
+            continue
+        meta = meta or {}
         mt = (meta.get("lastTurnEdgeAt") or meta.get("lastActivityAt") or mt * 1000) / 1000
-        NEEDS[sid] = bool(meta.get("interruptedAwaitingPerson"))
-        out.append(("Claude", sid, meta.get("title") or title or (first_user or "(untitled)")[:80], meta.get("cwd") or cwd, mt, last, role))
+        DETAILS[sid] = cached["extra"]
+        RUNNING[sid] = cached["extra"]["running"]
+        NEEDS[sid] = bool(meta.get("interruptedAwaitingPerson")) or cached["extra"]["needs"]
+        out.append(("Claude", sid, meta.get("title") or cached["title"], meta.get("cwd") or cached["cwd"], mt, cached["last"], cached["role"]))
     return out
 
 
-def scan_codex(cutoff):
+def scan_codex(cutoff, catalog=None, metadata=None):
+    metadata = metadata if metadata is not None else codex_metadata()
     out = []
     for p in glob.glob(os.path.join(HOME, ".codex", "sessions", "**", "*.jsonl"), recursive=True):
         try:
-            mt = os.path.getmtime(p)
+            stat = os.stat(p)
+            mt = stat.st_mtime
         except OSError:  # path too long on Windows
             continue
         if mt < cutoff:
             continue
-        first_user = last = cwd = role = None
-        for line in safe_lines(p):
-            try:
-                o = json.loads(line)
-            except ValueError:
-                continue
-            pl = o.get("payload") or {}
-            if o.get("type") == "session_meta":
-                cwd = pl.get("cwd")
-            elif o.get("type") == "response_item" and pl.get("type") == "message":
-                s = text_of(pl.get("content")).strip()
-                if pl.get("role") == "user" and s and not s.startswith("<"):
-                    first_user = first_user or s
-                    role = "user"
-                elif pl.get("role") == "assistant" and s:
-                    last = s
-                    role = "assistant"
-        out.append(("Codex", os.path.basename(p)[:-6], (first_user or "(untitled)")[:80], cwd, mt, last, role))
+        cached = catalog.cached_file(p, stat) if catalog else None
+        if cached and cached.get("parser_version") != 2:
+            cached = None
+        if cached is None:
+            extra = telemetry.empty()
+            first_user = last = cwd = role = running = None
+            sid = canonical_id(os.path.basename(p)[:-6])
+            sidechain = False
+            for line in safe_lines(p):
+                try:
+                    o = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(o, dict):
+                    continue
+                telemetry.codex(o, extra)
+                pl = o.get("payload") or {}
+                if o.get("type") == "session_meta":
+                    cwd = pl.get("cwd")
+                    sid = pl.get("id") or sid
+                    source = pl.get("source")
+                    sidechain = isinstance(source, dict) and "subagent" in source
+                elif o.get("type") == "event_msg":
+                    event = pl.get("type")
+                    if event == "task_started":
+                        running = True
+                    elif event in ("task_complete", "task_completed", "turn_aborted", "task_failed"):
+                        running = False
+                        if pl.get("last_agent_message"):
+                            last = pl["last_agent_message"]
+                            role = "assistant"
+                elif o.get("type") == "response_item" and pl.get("type") == "message":
+                    s = text_of(pl.get("content")).strip()
+                    if pl.get("role") == "user" and s and not s.startswith("<"):
+                        first_user = first_user or s
+                        role = "user"
+                    elif pl.get("role") == "assistant" and s and pl.get("phase") != "commentary":
+                        last = s
+                        role = "assistant"
+            if not (first_user or last):
+                continue  # do not replace a saved preview with an incomplete source
+            cached = {"id": sid, "title": (first_user or "(untitled)")[:80],
+                      "last": (last or "")[:16000], "cwd": cwd, "role": role,
+                      "running": extra["running"], "sidechain": sidechain,
+                      "extra": telemetry.finish(extra), "parser_version": 2}
+            if catalog:
+                catalog.cache_file(p, stat, cached)
+        sid = cached["id"]
+        meta = metadata.get(sid, {})
+        if cached["sidechain"] or meta.get("archived"):
+            continue
+        RUNNING[sid] = cached["running"]
+        NEEDS[sid] = cached["extra"]["needs"]
+        DETAILS[sid] = dict(cached["extra"])
+        DETAILS[sid]["branch"] = meta.get("git_branch") or DETAILS[sid]["branch"]
+        if not DETAILS[sid]["tokens"] and meta.get("tokens_used"):
+            DETAILS[sid]["tokens"] = {"total_tokens": meta["tokens_used"]}
+        out.append(("Codex", sid, (meta.get("title") or cached["title"])[:80],
+                    meta.get("cwd") or cached["cwd"], mt, cached["last"], cached["role"]))
     return out
 
 
-STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "read_state.json")
+@locked
+def collect_sessions():
+    """Discover all ages once, cache unchanged files, and retain missing source logs."""
+    links = claude_links()
+    metadata = codex_metadata()
+    hidden = {sid for sid, meta in META.items() if meta.get("isArchived")}
+    hidden.update(sid for sid, meta in metadata.items() if meta.get("archived"))
+    with Catalog(CATALOG) as catalog:
+        previous = {record["item"][1]: record for record in catalog.records()}
+        items = scan_claude(0, catalog) + scan_codex(0, catalog, metadata)
+        live = {item[1] for item in items}
+        for item in items:
+            src, sid = item[:2]
+            source_meta = metadata.get(sid, {}) if src == "Codex" else META.get(sid, {})
+            archive_key = "archived" if src == "Codex" else "isArchived"
+            unarchived = archive_key in source_meta and not source_meta[archive_key]
+            catalog.remember({"item": item, "href": href_for(src, sid, links),
+                              "needs": NEEDS.get(sid, False), "hidden": bool(previous.get(sid, {}).get("hidden")) and not unarchived,
+                              "extra": DETAILS.get(sid, {})})
+        saved = catalog.records()
+        for record in saved:
+            if record["item"][1] in hidden:
+                record["hidden"] = True
+                catalog.remember(record)
+        hooks = catalog.hooks()
+    for record in saved:
+        sid = record["item"][1]
+        HREFS[sid] = record["href"]
+        DETAILS.setdefault(sid, record.get("extra", {}))
+        if sid not in live:
+            NEEDS[sid] = record["needs"]
+            RUNNING[sid] = False  # an unavailable log cannot prove an agent is still running
+        hook = hooks.get(sid)
+        if hook and hook["timestamp"] >= record["item"][4]:
+            HOOKS[sid] = hook
+            NEEDS[sid] = hook["state"] == "needs"
+            RUNNING[sid] = hook["state"] == "working"
+    return sorted((tuple(r["item"]) for r in saved if not r.get("hidden")), key=lambda x: -x[4])
+
+
+def item_state(sid, mt, role, pinned=False):
+    age = time.time() - mt
+    if NEEDS.get(sid):
+        return "needs"
+    evidence_at = max(mt, HOOKS.get(sid, {}).get("timestamp", 0))
+    if RUNNING.get(sid) and evidence_at < boot_time():
+        return "interrupted"
+    if RUNNING.get(sid) is not None:
+        if RUNNING[sid]:
+            return "working"
+        if age > SETTLE_DAYS * 86400 and not pinned:
+            return "settled"
+        return "idle" if role == "user" else "done"
+    if age > SETTLE_DAYS * 86400 and not pinned:
+        return "settled"
+    if role == "user":
+        return "unknown"
+    return "idle" if role == "user" else "done"
+
+
+def boot_time():
+    if os.name == "nt":
+        import ctypes
+        kernel = ctypes.windll.kernel32
+        kernel.GetTickCount64.restype = ctypes.c_ulonglong
+        return time.time() - kernel.GetTickCount64() / 1000
+    return 0
+
+
+STATE = os.path.join(DATA_DIR, "read_state.json")
 
 
 def load_state():
-    return read_json(STATE, {})
+    state = {}
+    for sid, mt in read_json(STATE, {}).items():
+        key = canonical_id(sid)
+        state[key] = max(state.get(key, 0), mt)
+    return state
 
 
 def save_state(state):
     write_json(STATE, state)
 
 
-PINS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pins.json")
+PINS = os.path.join(DATA_DIR, "pins.json")
 
 
 def load_pins():
-    return read_json(PINS, {})
+    return {canonical_id(sid): value for sid, value in read_json(PINS, {}).items()}
 
 
 def merged_state():
@@ -178,27 +369,27 @@ def unread_count():
     return sum(1 for i in unread_json() if i["state"] in ("unread", "needs"))
 
 
+@locked
 def unread_json(mark_all=False):
     """Finished chats with activity since last marked read. First run baselines everything as read."""
-    items = scan_claude(time.time() - DAYS * 86400) + scan_codex(time.time() - DAYS * 86400)
-    now = time.time()
+    items = collect_sessions()
     state = read_json(STATE, None)
     if state is None:  # no state and no backup: first run, baseline existing chats as read
         state = {s[1]: s[4] for s in items}
-        mark_all = True
-    items.sort(key=lambda x: -x[4])
+        save_state(state)
+    else:
+        state = load_state()
     out = []
     pins = load_pins()
     merged = merged_state()
     for src, sid, title, cwd, mt, last, role in items:
-        if now - mt > SETTLE_DAYS * 86400 and sid not in pins:
-            continue  # settled
-        if NEEDS.get(sid):
+        status = item_state(sid, mt, role, sid in pins)
+        if status == "needs":
             out.append({"src": src, "title": title, "state": "needs", "mt": mt, "last": (last or "")[:300]})
             continue
-        if role == "user" and now - mt >= REPLY_SECS:
-            continue  # you spoke last long ago: abandoned, not waiting on you
-        if now - mt < WORKING_SECS or role == "user":
+        if status in ("settled", "idle"):
+            continue
+        if status == "working":
             out.append({"src": src, "title": title, "state": "working", "mt": mt, "last": ""})
         elif mt > merged.get(sid, 0):
             out.append({"src": src, "title": title, "state": "unread", "mt": mt, "last": (last or "")[:300]})
@@ -210,15 +401,30 @@ def unread_json(mark_all=False):
 
 META = {}   # CLI session id -> desktop session metadata
 NEEDS = {}  # CLI session id -> waiting on you
+RUNNING = {}  # session id -> explicit Codex task lifecycle, or None for old logs
+HREFS = {}  # last known deep link, retained even when the source file disappears
+DETAILS = {}
+HOOKS = {}
 
 
 def claude_links():
     """CLI session id -> desktop app session id, from the app's own session files."""
     m = {}
-    pat = os.path.join(HOME, "AppData", "Local", "Claude-Data", "*", "claude-code-sessions", "**", "local_*.json")
-    for p in glob.glob(pat, recursive=True):
+    META.clear()
+    NEEDS.clear()
+    RUNNING.clear()
+    DETAILS.clear()
+    HOOKS.clear()
+    roots = [
+        os.path.join(HOME, "AppData", "Local", "Claude-Data", "*"),
+        os.path.join(HOME, "AppData", "Roaming", "Claude"),
+        os.path.join(HOME, "AppData", "Local", "Packages", "Claude_*", "LocalCache", "Roaming", "Claude"),
+    ]
+    paths = {p for root in roots for p in glob.glob(os.path.join(root, "claude-code-sessions", "**", "local_*.json"), recursive=True)}
+    for p in sorted(paths):
         try:
-            o = json.load(open(p, encoding="utf8"))
+            with open(p, encoding="utf8") as f:
+                o = json.load(f)
             m[o["cliSessionId"]] = o["sessionId"]
             META[o["cliSessionId"]] = o
         except (OSError, ValueError, KeyError):
@@ -228,28 +434,26 @@ def claude_links():
 
 def href_for(src, sid, links):
     if src == "Codex":
-        return "codex://threads/" + sid[-36:]
+        return "codex://threads/" + canonical_id(sid)
     lid = links.get(sid)
     return f"claude://claude.ai/epitaxy/{lid}" if lid else ""
 
 
+@locked
 def render():
-    items = scan_claude(time.time() - DAYS * 86400) + scan_codex(time.time() - DAYS * 86400)
-    items.sort(key=lambda x: -x[4])
-    now = time.time()
-    links = claude_links()
+    items = collect_sessions()
     pins = load_pins()
     cards, pinned_cards, settled_cards = [], [], []
     for src, sid, title, cwd, mt, last, role in items:
         is_pinned = sid in pins
-        settled = now - mt > SETTLE_DAYS * 86400 and not is_pinned
-        state = "settled" if settled else "needs" if NEEDS.get(sid) else "working" if now - mt < WORKING_SECS or (role == "user" and now - mt < REPLY_SECS) else "idle" if role == "user" else "done"
+        state = item_state(sid, mt, role, is_pinned)
+        settled = state == "settled"
         when = time.strftime("%a %H:%M", time.localtime(mt))
         full = html.escape((last or "No answer yet")[:6000])
         snippet = html.escape(" ".join((last or "").split())[:200])
         folder = html.escape(os.path.basename(cwd or ""))
         card = (
-            f'<article class="row {src}{" pinned" if is_pinned else ""}" data-href="{href_for(src, sid, links)}" data-id="{sid}" data-mt="{int(mt)}" data-state="{state}">'
+            f'<article class="row {src}{" pinned" if is_pinned else ""}" data-href="{html.escape(HREFS.get(sid, ""), quote=True)}" data-id="{html.escape(sid, quote=True)}" data-mt="{mt}" data-state="{state}">'
             f'<i class="dot"></i><div class="main"><div class="top"><span class="title">{html.escape(title)}</span>'
             f'<span class="when">{when}<button class="pn" title="Pin">&#128204;</button><button class="dn" title="Mark done">&#10003; Done</button></span></div>'
             f'<div class="sub">{folder}<span class="pv">Preview</span></div><div class="snip">{snippet}</div>'
@@ -341,46 +545,124 @@ apply();
 
 
 ON_OPEN = None  # set by tray.py
+ON_CONTROL = None
+ON_NOTIFY = None
 
 
 class H(BaseHTTPRequestHandler):
+    def reply(self, status, data, content_type="application/json; charset=utf-8"):
+        if not isinstance(data, bytes):
+            data = json.dumps(data).encode("utf8")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def local_request(self):
+        allowed = ("localhost", "127.0.0.1", "[::1]")
+        host = self.headers.get("Host", "").split(":")[0]
+        origin = self.headers.get("Origin")
+        if host not in allowed or (origin and urlsplit(origin).netloc != self.headers.get("Host")):
+            self.reply(403, {"error": "This endpoint accepts same-origin local requests only"})
+            return False
+        return True
+
     def do_GET(self):
+        if not self.local_request():
+            return
         try:
             self._get()
         except Exception as e:  # keep serving no matter what
             log("GET error: " + repr(e))
-            self.send_response(500)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(("Inbox error, will retry: " + repr(e)).encode("utf8"))
+            self.reply(500, {"error": "Could not load the inbox. See inbox.log."})
 
     def _get(self):
-        if self.path == "/open":
+        import dashboard
+        path = urlsplit(self.path).path
+        if path == "/api/health":
+            self.reply(200, {"ok": True, "version": 2, "pid": os.getpid()})
+            return
+        if path in ("/api/state", "/api/export"):
+            self.reply(200, dashboard.snapshot())
+            return
+        if path == "/api/context":
+            sid = parse_qs(urlsplit(self.path).query).get("id", [""])[0]
+            try:
+                self.reply(200, dashboard.repository_context(sid))
+            except ValueError as exc:
+                self.reply(404, {"error": str(exc)})
+            return
+        if path == "/open":
             if ON_OPEN:
                 ON_OPEN()
             self.send_response(204)
             self.end_headers()
             return
-        if self.path.startswith("/favicon"):
+        if path.startswith("/favicon"):
             data, ctype = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "inbox.ico"), "rb").read(), "image/x-icon"
+        elif path in ("/", "/app.js", "/styles.css"):
+            name = "index.html" if path == "/" else path[1:]
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", name), "rb") as f:
+                data = f.read()
+            ctype = {"index.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8", "styles.css": "text/css; charset=utf-8"}[name]
         else:
-            data, ctype = render().encode("utf8"), "text/html; charset=utf-8"
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.end_headers()
-        self.wfile.write(data)
+            self.reply(404, {"error": "Not found"})
+            return
+        self.reply(200, data, ctype)
 
     def do_POST(self):
+        if not self.local_request():
+            return
         try:
             self._post()
+        except (ValueError, KeyError, TypeError) as exc:
+            self.reply(400, {"error": str(exc)})
         except Exception as e:
             log("POST error: " + repr(e))
-            self.send_response(500)
-            self.end_headers()
+            self.reply(500, {"error": "Could not save this change. See inbox.log."})
 
+    @locked
     def _post(self):
+        import dashboard
+        length = int(self.headers.get("Content-Length", 0))
+        if not 0 < length <= 1_000_000:
+            self.reply(413, {"error": "Invalid request size"})
+            return
+        if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+            self.reply(415, {"error": "Expected application/json"})
+            return
+        body = json.loads(self.rfile.read(length))
+        if not isinstance(body, dict):
+            raise ValueError("Expected an object")
+        if self.path == "/api/control":
+            command = body.get("command")
+            if command not in ("restart", "quit"):
+                raise ValueError("Unknown app control")
+            if ON_CONTROL is None:
+                self.reply(409, {"error": "App control requires the tray launcher"})
+                return
+            self.reply(200, {"ok": True})
+            threading.Timer(0.3, lambda: ON_CONTROL(command)).start()
+            return
+        if self.path == "/api/test-notification":
+            if ON_NOTIFY is None:
+                self.reply(409, {"error": "Notifications require the tray launcher"})
+                return
+            ON_NOTIFY("Notifications are working. Unread chats get one reminder after your chosen delay.", "Agent Manager")
+            self.reply(200, {"ok": True})
+            return
+        if self.path.startswith("/api/"):
+            name = self.path[5:]
+            if name not in ("read", "pin", "archive", "mark-all", "settings", "hook"):
+                self.reply(404, {"error": "Not found"})
+                return
+            self.reply(200, dashboard.action(name, body))
+            return
         if self.path == "/pin":
-            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
             pins = load_pins()
             if body.get("pinned"):
                 pins[body["id"]] = True
@@ -388,10 +670,12 @@ class H(BaseHTTPRequestHandler):
                 pins.pop(body["id"], None)
             write_json(PINS, pins)
         if self.path == "/read":
-            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
             state = load_state()
             state.update(body)
             save_state(state)
+        if self.path not in ("/pin", "/read"):
+            self.reply(404, {"error": "Not found"})
+            return
         self.send_response(204)
         self.end_headers()
 

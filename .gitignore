@@ -6,3 +6,9 @@ __pycache__/
 inbox.log
 read_state.json
 pins.json
+chat_catalog.sqlite3*
+hook_queue/
+data/
+cloud_config.json
+cloud_secret.bin
+notes/qa-data/

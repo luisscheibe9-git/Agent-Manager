@@ -4,6 +4,8 @@ Last updated: 2026-10-27. Owner: Luis (lscheibe). Windows 11, PowerShell. Don't 
 
 Active continuation details and exact testing/cloud steps: `notes/HANDOFF.md`. User authorized periodic GitHub updates during this implementation. Local backend currently passes 20 distinct regression tests; interactive QA is ongoing. Private cloud implementation follows only once local checks pass.
 
+Local QA milestone now passes 23 distinct tests plus interactive checks; see `notes/TEST_REPORT.md` for actual results and limitations. Installed lifecycle observers in `~/.claude/settings.json` with an original backup; preserved other observers/settings. Graceful QA restart/quit/offline retention verified. Production port8765 still has the older app; Luis was asked to Quit that tray instance. Cloud viewer work can proceed after the passed QA milestone; no cloud Site has been created yet.
+
 ## Current machine setup (2026-10-27)
 - Active milestone: implement all local wishlist features, test them extensively through computer use, then build the private cloud view only after local checks pass. Luis supplied `https://github.com/pingdotgg/t3code` as an architectural reference and authorized periodic GitHub updates. Use tested code milestones; keep this document current between them.
 - Git authentication is now working through GitHub CLI. Repaired the interrupted clone by fetching origin/main and restoring HEAD/index without overwriting local changes. Working branch: `main`; repository is private, with no existing PR workflow. Code below is in progress until the validation report records otherwise.
