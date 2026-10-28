@@ -1,0 +1,8 @@
+chrome_profile/
+__pycache__/
+*.pyc
+*.bak
+*.tmp
+inbox.log
+read_state.json
+pins.json

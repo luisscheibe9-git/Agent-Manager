@@ -1,0 +1,1 @@
+{ "name": "chat-inbox", "version": "0.1.0", "description": "Pane listing finished, unread Claude and Codex chats", "types": "./types/index.d.ts" }
