@@ -20,7 +20,7 @@ import dashboard
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHROME = shutil.which("chrome") or r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 URL = f"http://localhost:{inbox.PORT}"
-PROFILE = os.path.join(inbox.DATA_DIR, "chrome_profile")
+PROFILE = os.environ.get("AGENT_MANAGER_PROFILE_DIR", os.path.join(inbox.DATA_DIR, "chrome_profile"))
 WINDOW_TITLE = os.environ.get("AGENT_MANAGER_LABEL")
 BASE = Image.open(os.path.join(HERE, "inbox.ico")).convert("RGBA")  # largest entry
 if BASE.size[0] < 128:

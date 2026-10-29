@@ -1,42 +1,53 @@
-# Local milestone verification — 2026-10-28
+# Simple black inbox — verification report
 
-23 distinct Python regression tests pass (`python -m unittest -q test_inbox test_dashboard`).
-JavaScript syntax check passes (`node --check web/app.js`).
+Date: 2026-10-29. Branch: codex/simple-black. Base:1d95cfd.
+Source: C:/Users/Luis/.codex/worktrees/simple-black/agent manager.
+Preview: http://127.0.0.1:8878 (synthetic data only).
 
-## Automated coverage
-- Persist catalog, pins and read marks into a fresh process with source logs unavailable; retain old pinned chats and recover corrupt JSON from backup.
-- Current Codex text, titles/folder metadata, canonical IDs, final vs progress text, async questions, long-running turns, prior-boot interrupted work.
-- Claude legacy/Store metadata and saved deep links; tolerate incomplete sources without erasing previews.
-- Archive/restore; respect source archives during metadata outages, then recognize explicit unarchive.
-- Persist validated preferences; reject invalid settings and missing IDs.
-- Reminder delays, once-per-activity deduplication, disabled/archive/read exclusions and retry after notification failure.
-- Out-of-order hook queue; idempotent installer preserving other settings/observers, including mixed hook groups.
-- 60 concurrent state/pin/read operations; 300 saved chats and unavailable project folders.
-- HTTP routes/assets, origin restrictions, malformed request types and traversal rejection.
+## Automated checks
+- 26 distinct Python regression tests pass: `python -m unittest -q test_inbox test_dashboard test_black_launcher`.
+- `node --check web/app.js` and `git diff --check` pass.
+- Coverage includes durable catalog recovery, lifecycle/pending async questions, reminder delay/dedup/retry, read/pin/archive persistence, source metadata outage, hook observer preservation, concurrent requests, strict HTTP routes/origins and launcher data-directory selection.
 
-## Computer-use checks actually performed
-Used the Windows computer-use skill (`@oai/sky`) on the native QA Chrome app and browser controls on an isolated instance at localhost:8877. Data is synthetic under ignored `notes/qa-data`; real read marks were not used for destructive tests.
+## Actual computer-use checks
+Used the in-app browser, real buttons/fields, and screenshots. Mutation tests used isolated8chat fixtures under ignored notes/qa-data, never Luis's production read marks.
 
-- Green Working and red Needs input rows; Needs filter returns one waiting chat.
-- Selected chat shows token breakdown and preview; marking read does not dismiss a pending question.
-- Git context reads the fixture repository's actual `master` branch and README +1 change; reports absent PR without inventing one.
-- Unread filter changes after marking done; pin/unpin, archive, restore and project counts update.
-- Search: empty result, Unicode, and HTML-looking title rendered as text with zero injected script nodes.
-- Command palette opens via button and F2; filtering and Enter select a different chat. Arrow-key navigation works.
-- Grouping toggle and settled section; preferences save and reload.
-- Mobile 390×844 layout has no horizontal overflow; back-to-list and projects drawer work. Temporary viewport override reset afterwards.
-- Test notification API succeeds. Actual timed reminders sent once for both eligible fixture activities; persisted notified markers remain unchanged after restart.
-- Settings Restart app produces a new server PID (33188 → 29068), preserving 8 chats, 2 pins, 60-second delay and notification history.
-- Settings Quit app stops its server. Browser retains the last list, displays a reconnect warning. Relaunch restores the service.
-- Export downloads `agent-manager-backup.json` (8 synthetic chats) to Downloads.
+| Feature | Observed result |
+| --- | --- |
+| Original black concept | Compact always-dark single list, source-color left borders, top controls; no dashboard sidebar or split inspector. |
+| Live working/needs/completion | Appended realistic provider events. Same chat updated needs→working→unread completion without reload; working background green, needs-input red. |
+| Live token usage | Expanded Details remained open while total changed29,200→40,000; context17,000/200,000 displayed. |
+| Read/unread | Mark done changes finished chat toRead. Marking read on a pending question retains Needs your input. |
+| Pins | Pin moves row toPinned; pin andRead state survive page reload and process restart. |
+| Search | Search narrows titles; no-match state appears; Escape clears search. Unicode/HTML-looking titles remain text, with0injected inline script nodes. |
+| Projects/grouping | Atlas filter returns4saved chats including collapsed settled row; unread filter narrows to2. Group preference saves and survives restart. |
+| Mark all read | Finished unread chats disappear from unread filter; pending question remains and badge stays1. |
+| Inline previews/details | Details shows pending-input explanation, token breakdown and on-demand Git context. No separate dashboard panel. |
+| Git context | Current branch andREADME.md +1/−0 verified. Found/fixed frontend bug treating Git count strings as unavailable numbers. |
+| PR context | Disposable QA project temporarily referenced public pingdotgg/t3code PR27030. UI displayed title,OPEN state and exact verified URL. No PR created or changed. Fixture restored tomaster/no remote. |
+| Settings | Reminder enable,60second delay and14day settled age saved and reopened with the same values. Dialog focus and390px fit verified. |
+| Notification request | Test notification button succeeded. Timed reminder persisted notified=1 after delay, including after restart. Windows toast visibility was not independently observed. |
+| Settled | Collapsed saved chat expands and remains accessible. |
+| Responsive layout |390x844 page and dialog have no horizontal overflow. |
 
-Screenshots: `notes/screenshots/local-dashboard.png`, `notes/screenshots/offline-retained-list.png`.
+## Process/API checks
+- Graceful restart changed QA server PID25028→7248 and retained8chats,2pins,60second reminder,14day settled threshold and grouping preference.
+- Graceful quit produced visible offline banner with all8loaded rows retained; relaunch reconnected automatically without page reload.
+- Launcher resolves primary data toD:/agent manager from the separate branch checkout. Explicit QA data override wins. Separate ignored browser profile prevents borrowing the blue app's browser state.
 
-## Limits / remaining checks
-- A real Windows reboot has not been performed. Startup shortcut and target were inspected and launched; process restart persistence was tested.
-- Single-letter key injection through the automation tools did not emit DOM keydown events. j/k/e/p/a are implemented and case-normalized, but physical single-letter keyboard checks remain manual; Arrow keys/F2/Enter were verified through actual control input.
-- Source-app deep-link IDs were checked. No new agent prompts were sent; Codex desktop UI automation is excluded by the computer-use skill.
-- OS Focus Assist/notification suppression was not changed. Notification delivery requests succeed; visibility depends on Windows notification settings.
-- Live Claude hooks will be exercised as new Claude turns run. Installer/queue/bridge logic tested with fixtures; no synthetic prompts were sent to real agents.
-- The older production Chat Inbox process at port8765 must be quit by Luis before the new build takes over. It lacks a graceful control endpoint; direct stop was blocked by automatic approval review. QA app remains separate at8877.
-- Cloud implementation is the next milestone and is not covered by this report yet.
+## Screenshot evidence
+- black-overview.jpg
+- black-working.jpg
+- black-needs-input.jpg
+- black-live-completed.jpg
+- black-context-pr.jpg
+- black-settings.jpg
+- black-mobile.jpg
+- black-offline.jpg
+
+## Verification limits / pending user approval
+- Source-specific deep-link URL targets were inspected. Launching real chats/new chats in Claude/Codex was not automated, because that would leave the isolated fixture and operate the agent apps. A user smoke check remains for installed-app handoff.
+- OS tray/taskbar badge pixels and Windows toast visibility were not independently screenshot-verified. Backend unread counts, running QA tray, notification requests and persisted reminder markers were verified.
+- A real Windows reboot remains untested.
+- Production8765still runs blue. Automatic approval review rejected the attempted switch toblack with only 'blocked by policy'; the command did not execute. Explicit activation/startup and commit approval are pending.
+- No parent-project code commit/push was made. Blue/cloud work remains preserved and paused inD:/agent manager onmain.
