@@ -37,6 +37,10 @@ def configure():
 
 if __name__ == "__main__":
     data = configure()
+    runtime = data / ".venv" / "Scripts" / ("pythonw.exe" if sys.executable.lower().endswith("pythonw.exe") else "python.exe")
+    if "--describe" not in sys.argv and runtime.is_file() and Path(sys.prefix).resolve() != (data / ".venv").resolve():
+        subprocess.Popen([str(runtime), str(ROOT / "black_launcher.py"), *sys.argv[1:]], cwd=ROOT)
+        sys.exit()
     if "--describe" in sys.argv:
         print(json.dumps({"source": str(ROOT), "data": str(data), "profile": os.environ["AGENT_MANAGER_PROFILE_DIR"]}))
     else:

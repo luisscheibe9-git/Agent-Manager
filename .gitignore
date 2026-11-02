@@ -1,5 +1,6 @@
 chrome_profile/
 __pycache__/
+.venv/
 *.pyc
 *.bak
 *.tmp

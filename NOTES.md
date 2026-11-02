@@ -1,25 +1,48 @@
-# Simple black inbox — agent handoff
+# Agent Manager: simple black to-do list
 
-Read this file first. Current branch: codex/simple-black. Workspace: C:/Users/Luis/.codex/worktrees/simple-black/agent manager.
+Updated 2026-10-30. Branch: codex/simple-black. Read this first.
+Source: C:/Users/Luis/.codex/worktrees/simple-black/agent manager.
+Remote: https://github.com/luisscheibe9-git/Agent-Manager .
 
-Luis requested a separate branch returning to his original compact black inbox before further blue-dashboard work. Blue source and uncommitted cloud work remain untouched in D:/agent manager on main. Cloud publication was cancelled; no cloud files or sync client were imported into this branch. Branch starts from tested local backend commit1d95cfd; this restores the original visual concept without reverting persistence/status fixes.
+## Goal and behavior
+Luis wants a simple reliable to-do list of chats outside T3 Code, with a separate T3 section. Opening a chat or clicking Done clears it; All chats offers Return to to-do. Clearing never deletes the saved chat, transcript, pin or T3 data. Routine tool/token progress stays cleared; a new turn, reply or question returns it. Mark all done also clears working/pending rows, without answering provider questions. T3-managed chats, including imports, are excluded from the badge/reminders and have informational rows without an unverified T3 deep link.
 
-Scope assumption pending Luis's optional clarification: local tray/badge, saved chat list, read/pin/search/new-chat links, inline previews, projects, green working/red needs-input, reminders, and optional inline branch/PR/token details. No sidebar, split inspector, command palette or cloud UI. Do not resume blue/cloud work until this simple version works well.
+## Key files
+- inbox.py: HTTP server/source scans; parser cache version3; durable read/pin files.
+- telemetry.py: lifecycle/tokens and semantic attention_sequence.
+- dashboard.py: snapshots, persisted todo_decisions, settings/reminders/context.
+- t3_sessions.py: bounded read-only SQLite scan of ~/.t3/userdata/statev2.sqlite (legacy state.sqlite fallback). AGENT_MANAGER_T3_DB overrides. Exact provider-qualified native IDs from nativeThreadRef, legacy mappings, runtime cursors and importedTranscripts; never match titles/folders/internal T3 IDs. Includes WAL. Corrupt/locked/unsupported metadata fails open with a warning.
+- catalog.py: saved catalog/settings. Done binds to semantic attention, not file mtime.
+- web/: compact black To-do, All chats recovery, separate collapsible T3 section.
+- tray.py: badge/mark-all use dashboard semantics.
+- black_launcher.py: resolves primary checkout data from worktree; explicit overrides win.
 
-Key files: web/index.html, web/styles.css, web/app.js are the compact black frontend. inbox.py serves strict local APIs; dashboard.py handles state/settings/reminders/context; telemetry.py normalizes lifecycle/tokens; catalog.py persists chats; tray.py owns tray/taskbar and graceful controls. Backend tests: test_inbox.py and test_dashboard.py. Fixture generator: tools/qa_fixture.py creates only ignored notes/qa-data.
+## Running and preserved versions
+Live8765 runs this black branch with shared data D:/agent manager. Latest verification: PID37804;17saved chats retained,9todo,2T3;0missing IDs; saved read/pin files unchanged. Existing browser windows may need F5 once.
+Desktop/Downloads Agent Manager.lnk targets this checkout's black_launcher.py --open. Do not archive this worktree while shortcuts target it.
+Windows sign-in shortcut STILL points to BLUE D:/agent manager/tray.py. Earlier automatic approval review rejected changing it before execution. Do not claim startup changed.
+Blue source/uncommitted cloud work remain untouched at D:/agent manager on main. Cloud work paused; black has no sync worker.
 
-Use bundled Python C:/Users/Luis/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe and Node sibling dependencies/node/bin/node.exe. Plain python is a Store stub.
+## Run and verify
+Bundled Python: C:/Users/Luis/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe. Plain python is a Store stub. Node is sibling dependencies/node/bin/node.exe.
+Run: python black_launcher.py --open. Inspect: python black_launcher.py --describe.
+Tests: python -m unittest -q test_inbox test_dashboard test_black_launcher test_t3_sessions test_todo
+JS: node --check web/app.js
+43tests pass. See notes/TEST_REPORT.md for interactive checks and limits.
+tools/inspect_t3.py --summary reads mapping metadata and counts saved matches.
 
-Current state: new frontend implemented; syntax/backend tests and interactive QA underway. Preview should use port8878 and isolated notes/qa-data/app, never production read state for mutation tests. Production8765 currently runs the blue app from original folder (last verified PID27636), syncing13chats to the already deployed owner-only cloud Site. Do not terminate it with old PID18892 authorization: that replacement is complete.
+## Safe QA
+Mutation tests use port8878 and ignored notes/qa-data/home and notes/qa-data/app. Set AGENT_MANAGER_HOME, AGENT_MANAGER_DATA_DIR, AGENT_MANAGER_PORT=8878, AGENT_MANAGER_LABEL before launching.
+tools/qa_fixture.py resets synthetic fixtures; tools/qa_update.py appends lifecycle/token events; tools/qa_t3.py add/remove/unavailable/restore changes only synthetic T3 metadata. Never run mutation tests on production state.
+Screenshots notes/screenshots/todo-*.jpg contain synthetic data only.
 
-Next: complete actual browser interactions at desktop/390px, read/pin persistence, previews/inline details, needs state retained after read, project/search/group controls, settings, source metadata outage/restart/offline retention. Review screenshots and user scope reply; correct observed bugs. Keep NOTES.md current at milestones. No code commit/push without Luis's explicit approval. Branch creation was requested; commits were not.
+## Git and next steps
+Existing local checkpoint c09fe67 restores black; base1d95cfd. Current To-do/T3 changes are uncommitted. Global rules now default to tested feature-branch commit/push, but project AGENTS.md and CLAUDE.md retain the old explicit-permission restriction. Asked Luis to remove the stale restriction and commit/push codex/simple-black; await an actual reply, not selected defaults.
+Next: deliver phone-sized screenshot/test results; reconcile Git instructions on reply.
+Limits: installed-app deep-link handoff, native badge/toast pixels and real reboot unverified. Browser policy blocked codex:// navigation during QA; click-to-clear still persisted and was observed.
 
-## Verified black milestone — 2026-10-29
-- Luis confirmed original scope and explicitly requested every feature be tested through computer use with screenshots. See notes/TEST_REPORT.md for precise results and limitations.
--26Python tests pass; JS syntax and diff checks pass. Actual UI verifies live needs→working→completed status updates; live tokens29,200→40,000 with Details kept open; read/pin/filter/group/preferences/settled controls; real read-only PR metadata; mobile fit; offline recovery. Eight JPEG screenshots saved in notes/screenshots/black-*.jpg.
-- Fixed discovered Git change-count rendering bug (counts are strings). Added black_launcher.py and3tests so a separate branch reuses original durable data instead of silently baselining a new catalog. inbox.bat and startup installer target this launcher. It honors explicit data overrides and uses an ignored separate Chrome profile.
-- QA graceful restart and quit/relaunch preserve8chats,2pins and settings; timed reminder notified marker remained1. Native OS badge/toast visuals, real app deep-link handoff, and real reboot remain explicit verification limits.
-- Attempted production activation was rejected BEFORE execution by automatic approval review ('blocked by policy', no details). Blue remains running8765; black preview8878is isolated. Asked Luis for activation/startup approval and commit choice. Await actual replies; preselected options are not approval. No code committed/pushed.
+Phone deliverables: Downloads/Agent-Manager-Todo-T3-Preview.jpg and Agent-Manager-Todo-T3-Test-Report.md. Original small synthetic screenshot: notes/screenshots/todo-phone-preview.jpg. Private Drive preview: https://drive.google.com/file/d/1wa_OlDy3zkGlDUacw1wRYFnsnNBrVRZ1/view?usp=drivesdk . No public permissions added.
 
-## Commit authorization — 2026-10-29
-Luis explicitly approved committing the black branch after asking what commit means. Commit locally only; code push was not approved. Activation/startup approval remains pending because Luis is on his phone and wants to review a working screenshot first. Local-path Markdown images failed to load on phone; try sending the screenshot as native inline image content before adding external hosting. Do not resume blue/cloud feature work for this image delivery fix.
+## Launch repair — 2026-11-02
+The app failed silently because Codex's shared Python runtime no longer contained pystray. Created D:/agent manager/.venv with requirements.txt; keep it ignored. black_launcher.py now hands off to that environment when invoked by the shared runtime. Desktop, Downloads and Startup Agent Manager.lnk now target D:/agent manager/.venv/Scripts/pythonw.exe and this checkout's black_launcher.py (Desktop/Downloads use --open). Startup now uses black, superseding the older blue-startup warning above. install-startup.ps1 defaults to the primary checkout's .venv. Rebuild environment using bundled python -m venv 'D:/agent manager/.venv', then .venv/Scripts/python.exe -m pip install -r requirements.txt. This environment still requires its base Python installation to remain installed.
+Verified native Chrome inbox visibly open, health version2 PID27104, 15 currently discovered saved chats,9to-dos,2T3; all43 regression tests pass. No chat states were cleared during repair. Original blue/cloud work remains paused and untouched except ignoring .venv. Desktop/Downloads shortcut filename: Agent Manager.lnk.

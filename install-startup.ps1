@@ -1,8 +1,13 @@
 param(
-    [string]$Pythonw = (Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\python\pythonw.exe')
+    [string]$Pythonw
 )
 $ErrorActionPreference = 'Stop'
 $appDirectory = $PSScriptRoot
+if (-not $Pythonw) {
+    $commonDirectory = & git -C $appDirectory rev-parse --path-format=absolute --git-common-dir 2>$null
+    $dataDirectory = if ($LASTEXITCODE -eq 0) { Split-Path -Parent $commonDirectory } else { $appDirectory }
+    $Pythonw = Join-Path $dataDirectory '.venv\Scripts\pythonw.exe'
+}
 $pythonExecutable = (Resolve-Path -LiteralPath $Pythonw).Path
 $startupDirectory = [Environment]::GetFolderPath('Startup')
 $shortcutFile = Join-Path $startupDirectory 'Agent Manager.lnk'
