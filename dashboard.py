@@ -6,6 +6,8 @@ import re
 import subprocess
 import time
 import hashlib
+import queue
+import threading
 
 import inbox
 import t3_sessions
@@ -38,6 +40,65 @@ def update_settings(values):
     with Catalog(inbox.CATALOG) as db:
         db.set("preferences", current)
     return current
+
+
+def counts(rows):
+    active = [r for r in rows if not r["archived"] and not r["managed_by_t3"]]
+    todo = [r for r in active if not r["read"]]
+    return {"total": len(active), "todo": len(todo),
+            "t3": sum(r["managed_by_t3"] and not r["archived"] for r in rows),
+            "needs": sum(r["state"] == "needs" for r in todo),
+            "working": sum(r["state"] == "working" for r in todo),
+            "unread": sum(r["state"] == "unread" for r in todo)}
+
+
+_CACHE = {"data": None}
+_WAKE = threading.Event()
+_ACTION_LOCK = threading.Lock()
+_STARTED = []
+_GEN = [0]
+
+
+def _refresher():
+    while True:
+        try:
+            gen = _GEN[0]
+            fresh = snapshot()
+            if gen == _GEN[0]:  # an action landed mid-scan; this scan may predate it
+                _CACHE["data"] = fresh
+            else:
+                _WAKE.set()
+        except Exception as exc:
+            inbox.log("refresh error: " + repr(exc))
+        _WAKE.wait(2)
+        _WAKE.clear()
+
+
+def start_refresher():
+    """Called by the server; tests and one-shot tools skip it and scan on demand."""
+    if not _STARTED:
+        _STARTED.append(1)
+        _CACHE["data"] = snapshot()
+        threading.Thread(target=_refresher, daemon=True).start()
+        threading.Thread(target=_writer, daemon=True).start()
+
+
+def cached_snapshot():
+    """Last scan, refreshed in the background so requests never wait on the log scan."""
+    if not _STARTED or _CACHE["data"] is None:
+        return snapshot()
+    return _CACHE["data"]
+
+
+def _patch(sid, **fields):
+    data = _CACHE["data"]
+    if not data:
+        return
+    for row in data["chats"]:
+        if row["id"] == sid:
+            row.update(fields)
+    data["chats"].sort(key=lambda r: (not r["pinned"], -r["updated_at"]))
+    data["counts"] = counts(data["chats"])
 
 
 @inbox.locked
@@ -86,27 +147,76 @@ def snapshot():
                      "branch": extra.get("branch", ""), "details": extra,
                      "attention": attention, "managed_by_t3": (source, sid) in t3["sessions"]})
     rows.sort(key=lambda r: (not r["pinned"], -r["updated_at"]))
-    active = [r for r in rows if not r["archived"] and not r["managed_by_t3"]]
-    todo = [r for r in active if not r["read"]]
-    return {"chats": rows, "counts": {"total": len(active),
-            "todo": len(todo), "t3": sum(r["managed_by_t3"] and not r["archived"] for r in rows),
-            "needs": sum(r["state"] == "needs" for r in todo),
-            "working": sum(r["state"] == "working" for r in todo),
-            "unread": sum(r["state"] == "unread" for r in todo)},
+    return {"chats": rows, "counts": counts(rows),
             "t3": {"status": t3["status"], "reason": t3["reason"]},
             "settings": prefs, "updated_at": time.time(), "version": 2,
             "title": os.environ.get("AGENT_MANAGER_LABEL", "Agent Manager")}
 
 
-@inbox.locked
 def action(name, body):
-    if name == "settings":
-        return update_settings(body)
-    if name == "hook":
-        return hook(body)
-    rows = snapshot()["chats"]
+    if name in ("settings", "hook"):
+        with inbox.DATA_LOCK:
+            return update_settings(body) if name == "settings" else hook(body)
+    return _action(name, body)
+
+
+_QUEUE = queue.Queue()
+
+
+def _writer():
+    while True:
+        job = _QUEUE.get()
+        try:
+            with _ACTION_LOCK:
+                _apply(*job)
+        except Exception as exc:
+            inbox.log("action error: " + repr(exc))
+        _GEN[0] += 1
+        _WAKE.set()
+
+
+def _preview(name, body, rows, sid):
+    """Validate and show the change in the cached list at once."""
+    if name == "mark-all":
+        for row in rows:
+            if not row["archived"] and not row["managed_by_t3"]:
+                _patch(row["id"], read=True)
+    elif name == "read":
+        if not isinstance(body.get("read", True), bool):
+            raise ValueError("Expected read true or false")
+        _patch(sid, read=body.get("read", True))
+    elif name == "pin":
+        if not isinstance(body.get("pinned"), bool):
+            raise ValueError("Expected pinned true or false")
+        _patch(sid, pinned=body["pinned"])
+    elif name == "archive":
+        if not isinstance(body.get("archived"), bool):
+            raise ValueError("Expected archived true or false")
+        _patch(sid, archived=body["archived"])
+    else:
+        raise ValueError("Unknown action")
+
+
+def _action(name, body):
+    rows = cached_snapshot()["chats"]
     by_id = {r["id"]: r for r in rows}
     sid = body.get("id")
+    if name != "mark-all" and sid not in by_id:
+        rows = snapshot()["chats"]
+        by_id = {r["id"]: r for r in rows}
+        if sid not in by_id:
+            raise ValueError("Chat no longer exists")
+    job = (name, body, [dict(r) for r in rows], by_id, sid)
+    if not _STARTED:  # tests and one-shot tools: save before returning
+        with _ACTION_LOCK:
+            return _apply(*job)
+    _GEN[0] += 1
+    _preview(name, body, rows, sid)
+    _QUEUE.put(job)
+    return {"ok": True}
+
+
+def _apply(name, body, rows, by_id, sid):
     if name == "mark-all":
         marks = inbox.load_state()
         with Catalog(inbox.CATALOG) as db:

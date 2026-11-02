@@ -104,13 +104,14 @@ def start_server():
         return
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
+    threading.Thread(target=dashboard.start_refresher, daemon=True).start()
     server["thread"] = t
     server["http"] = srv
     inbox.log("server started")
 
 
 def refresh(icon):
-    data = dashboard.snapshot()
+    data = dashboard.cached_snapshot()
     n = data["counts"]["todo"]
     icon.icon = with_badge(n)
     icon.title = f"Agent Manager: {n} need attention" if n else "Agent Manager: all caught up"

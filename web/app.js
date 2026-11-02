@@ -15,15 +15,33 @@ async function api(path,body) {
   if(!response.ok) throw new Error(data.error || 'Request failed');
   return data;
 }
+const fresh = {pin:b=>({pinned:b.pinned}), read:b=>({read:b.read})};
+const pending = new Map();
+function optimistic(path,body) {
+  if(!state||!fresh[path]) return;
+  const row=state.chats.find(r=>r.id===body.id); if(!row) return;
+  const fields=fresh[path](body); Object.assign(row,fields);
+  pending.set(body.id+path,{id:body.id,fields,until:Date.now()+8000});
+  applyLocal();
+}
+function applyLocal() {
+  state.chats.sort((a,b)=>(b.pinned-a.pinned)||(b.updated_at-a.updated_at));
+  const active=state.chats.filter(r=>!r.archived&&!r.managed_by_t3), todo=active.filter(r=>!r.read);
+  Object.assign(state.counts,{todo:todo.length,needs:todo.filter(r=>r.state==='needs').length,working:todo.filter(r=>r.state==='working').length,unread:todo.filter(r=>r.state==='unread').length});
+  render(true);
+}
 async function mutate(path,body,message) {
-  try { await api(path,body); await refresh(); if(message) notice(message); return true; }
-  catch(error) { notice(error.message); return false; }
+  optimistic(path,body);
+  try { await api(path,body); if(message) notice(message); refresh(); return true; }
+  catch(error) { pending.clear(); notice(error.message); refresh(); return false; }
 }
 async function refresh() {
   const request=++refreshNumber;
   try {
     const data=await api('state'); if(request!==refreshNumber) return;
-    state=data; $('connection-error').hidden=true; $('connection').textContent='Saved locally · '+new Date(data.updated_at*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    for(const [key,p] of pending) { if(Date.now()>p.until) { pending.delete(key); continue; } const row=data.chats.find(r=>r.id===p.id); if(row) Object.assign(row,p.fields); }
+    if(pending.size) { state=data; applyLocal(); } else state=data;
+    $('connection-error').hidden=true; $('connection').textContent='Saved locally · '+new Date(data.updated_at*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     render();
   } catch { if(request!==refreshNumber) return; $('connection-error').textContent='Connection lost. Your last loaded list is still here. Reconnecting…'; $('connection-error').hidden=false; $('connection').textContent='Offline · Last loaded list retained'; }
 }

@@ -587,7 +587,7 @@ class H(BaseHTTPRequestHandler):
             self.reply(200, {"ok": True, "version": 2, "pid": os.getpid()})
             return
         if path in ("/api/state", "/api/export"):
-            self.reply(200, dashboard.snapshot())
+            self.reply(200, dashboard.cached_snapshot())
             return
         if path == "/api/context":
             sid = parse_qs(urlsplit(self.path).query).get("id", [""])[0]
@@ -625,7 +625,6 @@ class H(BaseHTTPRequestHandler):
             log("POST error: " + repr(e))
             self.reply(500, {"error": "Could not save this change. See inbox.log."})
 
-    @locked
     def _post(self):
         import dashboard
         length = int(self.headers.get("Content-Length", 0))
