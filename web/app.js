@@ -5,11 +5,12 @@ const storage = { get(key, fallback='') { try { return localStorage.getItem('bla
 const labels = {needs:'Needs your input',working:'Working',unread:'Unread',read:'Read',settled:'Settled',idle:'Idle',unknown:'Status unknown',interrupted:'Interrupted'};
 const number = value => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString() : '—';
 const when = timestamp => new Date(timestamp*1000).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-let state, query=storage.get('query'), project=storage.get('project'), onlyUnread=storage.get('unread')==='true', rendered='', noticeTimer, refreshNumber=0;
+// Always open on the complete to-do list, never an old search or recovery view.
+let state, query='', project='', showAll=false, rendered='', noticeTimer, refreshNumber=0;
 const expanded = new Set(), contexts = new Map(), loadingContexts = new Set();
 function notice(message) { clearTimeout(noticeTimer); $('notice').textContent=message; $('notice').hidden=false; noticeTimer=setTimeout(()=>$('notice').hidden=true,5000); }
 async function api(path,body) {
-  const response=await fetch('/api/'+path,body===undefined ? {cache:'no-store'} : {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const response=await fetch('/api/'+path,body===undefined ? {cache:'no-store'} : {method:'POST',keepalive:true,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const data=await response.json();
   if(!response.ok) throw new Error(data.error || 'Request failed');
   return data;
@@ -45,9 +46,9 @@ function contextHTML(context) {
   return `<p>Current branch: ${escapeHTML(context.branch||'detached HEAD')}</p>${link||'<p>No pull request found, or GitHub is unavailable.</p>'}${context.files.length?'<ul class="context-files">'+context.files.map(f=>`<li>${escapeHTML(f.path)} · ${changes(f)}</li>`).join('')+'</ul>':'<p>Working tree is clean.</p>'}`;
 }
 function rowHTML(row) {
-  const id=escapeHTML(row.id), href=safeLink(row.href), details=row.details||{};
+  const id=escapeHTML(row.id), href=row.managed_by_t3?'':safeLink(row.href), details=row.details||{};
   const title=href ? `<a class="title" href="${escapeHTML(href)}" title="${escapeHTML(row.title)}" data-action="open">${escapeHTML(row.title)}</a>` : `<span class="title" title="${escapeHTML(row.title)}">${escapeHTML(row.title)}</span>`;
-  return `<article class="row ${row.source==='Claude'?'Claude':'Codex'} ${escapeHTML(row.state)}" data-id="${id}" tabindex="0" aria-label="${escapeHTML(row.title)}, ${escapeHTML(labels[row.state]||row.state)}"><div class="top">${title}<div class="actions"><button data-action="pin" aria-label="${row.pinned?'Unpin':'Pin'} ${escapeHTML(row.title)}" aria-pressed="${row.pinned}">${row.pinned?'◆ Pinned':'◇ Pin'}</button><button data-action="read" aria-label="${row.read?'Mark unread':'Mark done'} ${escapeHTML(row.title)}">${row.read?'Unread':'✓ Done'}</button></div></div><div class="meta"><span class="state ${escapeHTML(row.state)}">${escapeHTML(labels[row.state]||row.state)}</span><span>${escapeHTML(row.project)}</span>${row.branch?`<span>⑂ ${escapeHTML(row.branch)}</span>`:''}<time>${escapeHTML(when(row.updated_at))}</time></div><div class="snippet">${escapeHTML(row.last||'No final answer yet.')}</div><div class="row-links"><details data-expand="preview:${id}" ${expanded.has('preview:'+row.id)?'open':''}><summary>Preview</summary><pre class="answer">${escapeHTML(row.last||'No final answer yet.')}</pre></details><details data-expand="details:${id}" ${expanded.has('details:'+row.id)?'open':''}><summary>Details</summary><div class="details-body"><p>${escapeHTML(row.cwd||'No project folder')}</p>${row.state==='needs'?'<p>Answer the pending question in the original app. Marking read does not clear it.</p>':''}${row.state==='interrupted'?'<p>This turn was active before Windows last started. Open the chat to resume.</p>':''}${tokenHTML(details,row.source)}<h3>Project context</h3><button data-action="context" ${loadingContexts.has(row.id)?'disabled':''}>${loadingContexts.has(row.id)?'Loading…':contexts.has(row.id)?'Refresh branch, PR & changes':'Load branch, PR & changes'}</button>${contexts.has(row.id)?contextHTML(contexts.get(row.id)):''}</div></details></div></article>`;
+  return `<article class="row ${row.source==='Claude'?'Claude':'Codex'} ${escapeHTML(row.state)} ${row.managed_by_t3?'t3':''}" data-id="${id}" tabindex="0" aria-label="${escapeHTML(row.title)}, ${escapeHTML(labels[row.state]||row.state)}"><div class="top">${title}<div class="actions"><button data-action="pin" aria-label="${row.pinned?'Unpin':'Pin'} ${escapeHTML(row.title)}" aria-pressed="${row.pinned}">${row.pinned?'◆ Pinned':'◇ Pin'}</button><button data-action="read" aria-label="${row.read?'Return to to-do':'Mark done'} ${escapeHTML(row.title)}">${row.read?'↶ To-do':'✓ Done'}</button></div></div><div class="meta"><span class="state ${escapeHTML(row.state)}">${escapeHTML(labels[row.state]||row.state)}</span><span>${escapeHTML(row.project)}</span>${row.branch?`<span>⑂ ${escapeHTML(row.branch)}</span>`:''}<time>${escapeHTML(when(row.updated_at))}</time></div><div class="snippet">${escapeHTML(row.last||'No final answer yet.')}</div><div class="row-links"><details data-expand="preview:${id}" ${expanded.has('preview:'+row.id)?'open':''}><summary>Preview</summary><pre class="answer">${escapeHTML(row.last||'No final answer yet.')}</pre></details><details data-expand="details:${id}" ${expanded.has('details:'+row.id)?'open':''}><summary>Details</summary><div class="details-body"><p>${escapeHTML(row.cwd||'No project folder')}</p>${row.state==='needs'?'<p>Answer the pending question in the original app. Done clears it from this list only.</p>':''}${row.state==='interrupted'?'<p>This turn was active before Windows last started. Open the chat to resume.</p>':''}${tokenHTML(details,row.source)}<h3>Project context</h3><button data-action="context" ${loadingContexts.has(row.id)?'disabled':''}>${loadingContexts.has(row.id)?'Loading…':contexts.has(row.id)?'Refresh branch, PR & changes':'Load branch, PR & changes'}</button>${contexts.has(row.id)?contextHTML(contexts.get(row.id)):''}</div></details></div></article>`;
 }
 function render(force=false) {
   if(!state) return;
@@ -57,13 +58,15 @@ function render(force=false) {
   if(project && !projects.has(project)) { project=''; storage.set('project',''); }
   const projectOptions=JSON.stringify([...projects]);
   if($('project').dataset.options!==projectOptions) { $('project').innerHTML='<option value="">All projects</option>'+[...projects].sort((a,b)=>a[1].localeCompare(b[1])).map(([key,label])=>`<option value="${escapeHTML(key)}">${escapeHTML(label)}</option>`).join(''); $('project').dataset.options=projectOptions; }
-  $('project').value=project; $('group').checked=state.settings.group_by_project; $('unread-only').setAttribute('aria-pressed',String(onlyUnread));
-  const count=state.counts.needs+state.counts.unread;
+  $('project').value=project; $('group').checked=state.settings.group_by_project; $('all-chats').setAttribute('aria-pressed',String(showAll)); $('t3-warning').hidden=state.t3?.status!=='unavailable';
+  const count=state.counts.todo;
   $('unread-count').textContent=count; $('unread-count').classList.toggle('zero',count===0);
   document.title=(count?'('+count+') ':'')+(state.title==='Agent Manager'?'Chat inbox':state.title||'Chat inbox');
-  const rows=chats.filter(row=>(!project||row.project_key===project)&&(!onlyUnread||['needs','working','unread'].includes(row.state))&&(!query||(row.title+' '+row.project+' '+row.last).toLocaleLowerCase().includes(query.toLocaleLowerCase())));
-  $('summary').textContent=`${rows.length} chat${rows.length===1?'':'s'} · ${state.counts.needs} need your input · ${state.counts.working} working`;
-  const signature=JSON.stringify([rows,state.settings.group_by_project,project,query,onlyUnread]);
+  const filtered=chats.filter(row=>(!project||row.project_key===project)&&(!query||(row.title+' '+row.project+' '+row.last).toLocaleLowerCase().includes(query.toLocaleLowerCase())));
+  const rows=filtered.filter(row=>!row.managed_by_t3&&(showAll||!row.read)), t3=filtered.filter(row=>row.managed_by_t3);
+  $('t3-section').hidden=!t3.length; $('t3-summary').textContent='T3 Code · '+t3.length+' chat'+(t3.length===1?'':'s');
+  $('summary').textContent=`${rows.length} ${showAll?'saved chat':'to-do'}${rows.length===1?'':'s'} · ${state.counts.needs} need your input · ${state.counts.working} working`;
+  const signature=JSON.stringify([rows,t3,state.settings.group_by_project,project,query,showAll]);
   if(!force && signature===rendered) return;
   const focus=document.activeElement, focusId=focus?.closest('[data-id]')?.dataset.id, focusAction=focus?.dataset.action;
   rendered=signature;
@@ -74,30 +77,31 @@ function render(force=false) {
     const map=new Map(); for(const row of rest) { if(!map.has(row.project_key)) map.set(row.project_key,{label:row.project,rows:[]}); map.get(row.project_key).rows.push(row); }
     return result+[...map.values()].map(group=>`<h2 class="group-heading">${escapeHTML(group.label)}</h2>${group.rows.map(rowHTML).join('')}`).join('');
   }
-  const recent=rows.filter(row=>row.state!=='settled'||row.pinned), settled=rows.filter(row=>row.state==='settled'&&!row.pinned);
-  $('chats').innerHTML=rows.length ? groups(recent)+(settled.length?`<details class="settled" data-expand="settled" ${expanded.has('settled')||query?'open':''}><summary>Settled · ${settled.length} saved chat${settled.length===1?'':'s'}</summary>${groups(settled)}</details>`:'') : '<p class="empty">'+(query||project?'No matching chats.':'No chats to show.')+'</p>';
-  $('chats').querySelectorAll('details').forEach(details=>details.addEventListener('toggle',()=>{if(details.open) expanded.add(details.dataset.expand); else expanded.delete(details.dataset.expand);}));
-  if(focusId) { const article=$('chats').querySelector(`[data-id="${CSS.escape(focusId)}"]`); const next=focusAction?article?.querySelector(`[data-action="${CSS.escape(focusAction)}"]`):article; next?.focus({preventScroll:true}); }
+  const recent=rows.filter(row=>!showAll||row.state!=='settled'||row.pinned), settled=rows.filter(row=>showAll&&row.state==='settled'&&!row.pinned);
+  $('chats').innerHTML=rows.length ? groups(recent)+(settled.length?`<details class="settled" data-expand="settled" ${expanded.has('settled')||query?'open':''}><summary>Settled · ${settled.length} saved chat${settled.length===1?'':'s'}</summary>${groups(settled)}</details>`:'') : '<p class="empty">'+(query||project?'No matching chats.':showAll?'No saved chats.':'All done. New chat activity will appear here.')+'</p>';
+  $('t3-chats').innerHTML=t3.map(rowHTML).join('');
+  $('chat-lists').querySelectorAll('details[data-expand]').forEach(details=>details.addEventListener('toggle',()=>{if(details.open) expanded.add(details.dataset.expand); else expanded.delete(details.dataset.expand);}));
+  if(focusId) { const article=$('chat-lists').querySelector(`[data-id="${CSS.escape(focusId)}"]`); const next=focusAction?article?.querySelector(`[data-action="${CSS.escape(focusAction)}"]`):article; next?.focus({preventScroll:true}); }
 }
-$('chats').addEventListener('click',async event=>{
+$('chat-lists').addEventListener('click',async event=>{
   const article=event.target.closest('[data-id]'); if(!article) return;
   const row=state.chats.find(row=>row.id===article.dataset.id); if(!row) return;
   const action=event.target.closest('[data-action]')?.dataset.action;
   if(action==='pin') await mutate('pin',{id:row.id,pinned:!row.pinned});
   else if(action==='read') await mutate('read',{id:row.id,read:!row.read});
-  else if(action==='open') { mutate('read',{id:row.id,read:true}); }
+  else if(action==='open'&&!row.managed_by_t3) { mutate('read',{id:row.id,read:true}); }
   else if(action==='context') {
     loadingContexts.add(row.id); render(true);
     try { contexts.set(row.id,await api('context?id='+encodeURIComponent(row.id))); } catch(error) { notice(error.message); }
     finally { loadingContexts.delete(row.id); render(true); }
   } else if(!event.target.closest('a,button,details,pre')) article.querySelector('a.title')?.click();
 });
-$('chats').addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.matches('article')){event.preventDefault();event.target.querySelector('a.title')?.click();}});
+$('chat-lists').addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.matches('article')){event.preventDefault();event.target.querySelector('a.title')?.click();}});
 $('search').value=query;
 $('search').addEventListener('input',()=>{query=$('search').value;storage.set('query',query);render();});
 $('project').addEventListener('change',()=>{project=$('project').value;storage.set('project',project);render();});
-$('unread-only').onclick=()=>{onlyUnread=!onlyUnread;storage.set('unread',onlyUnread);render();};
-$('mark-all').onclick=()=>mutate('mark-all',{},'Finished chats marked read');
+$('all-chats').onclick=()=>{showAll=!showAll;storage.set('show-all',showAll);render();};
+$('mark-all').onclick=()=>mutate('mark-all',{},'To-do list cleared');
 $('group').onchange=()=>mutate('settings',{group_by_project:$('group').checked});
 $('settings-open').onclick=()=>{
   if(!state) return;

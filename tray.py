@@ -64,7 +64,7 @@ def open_window(*_):
 
 
 def mark_all(icon, *_):
-    inbox.unread_json(mark_all=True)
+    dashboard.action("mark-all", {})
     refresh(icon)
 
 
@@ -111,7 +111,7 @@ def start_server():
 
 def refresh(icon):
     data = dashboard.snapshot()
-    n = data["counts"]["needs"] + data["counts"]["unread"]
+    n = data["counts"]["todo"]
     icon.icon = with_badge(n)
     icon.title = f"Agent Manager: {n} need attention" if n else "Agent Manager: all caught up"
     hwnd = taskbar.find_window(WINDOW_TITLE)

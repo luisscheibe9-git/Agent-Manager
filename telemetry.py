@@ -7,7 +7,7 @@ def empty():
     return {"branch": "", "pull_requests": [], "changed_files": [], "tokens": {},
             "model": "", "context_window": None, "context_tokens": None,
             "running": None, "needs": False, "rate_limits": None, "pending": {},
-            "active_turn": None, "usage_messages": {}}
+            "active_turn": None, "usage_messages": {}, "attention_sequence": 0}
 
 
 def text_details(text, details):
@@ -35,12 +35,14 @@ def codex(record, details):
         details["model"] = payload.get("model") or details["model"]
     elif kind == "event_msg":
         if event == "task_started":
+            details["attention_sequence"] += 1
             details.update(running=True, needs=False, pending={}, active_turn=payload.get("root_turn_id") or payload.get("turn_id"))
             details["context_window"] = payload.get("model_context_window") or details["context_window"]
         elif event in ("task_complete", "task_completed", "turn_aborted", "task_failed"):
             turn = payload.get("root_turn_id") or payload.get("turn_id")
             if not turn or not details["active_turn"] or turn == details["active_turn"]:
                 details["running"] = False
+                details["attention_sequence"] += 1
         elif event == "token_count":
             info = payload.get("info") or {}
             details["tokens"] = info.get("total_token_usage") or details["tokens"]
@@ -54,6 +56,7 @@ def codex(record, details):
             arguments = payload.get("arguments") or payload.get("input") or ""
             text_details(arguments, details)
             if "request_user_input" in name:
+                details["attention_sequence"] += 1
                 details["pending"][call_id or name] = "async" if "async" in name else "sync"
         elif event in ("function_call_output", "custom_tool_call_output"):
             output = payload.get("output", "")
@@ -63,6 +66,9 @@ def codex(record, details):
         elif event == "message":
             if payload.get("role") == "user":
                 details["pending"].clear()
+                details["attention_sequence"] += 1
+            elif payload.get("role") == "assistant" and payload.get("phase") != "commentary":
+                details["attention_sequence"] += 1
             for block in payload.get("content", []):
                 if isinstance(block, dict):
                     text_details(block.get("text", ""), details)
@@ -78,11 +84,13 @@ def claude(record, details):
         content = message.get("content")
         if isinstance(content, str) or any(isinstance(b, dict) and b.get("type") == "text" for b in content or []):
             details.update(running=True, needs=False)
+            details["attention_sequence"] += 1
     if record.get("type") == "assistant":
         details["model"] = message.get("model") or details["model"]
         stop = message.get("stop_reason")
         if stop in ("end_turn", "stop_sequence", "max_tokens"):
             details.update(running=False, needs=False)
+            details["attention_sequence"] += 1
         elif stop == "tool_use":
             details["running"] = True
         for block in message.get("content", []) if isinstance(message.get("content"), list) else []:
@@ -92,6 +100,8 @@ def claude(record, details):
             if block.get("type") == "tool_use":
                 details["running"] = True
                 details["needs"] = block.get("name") in ("AskUserQuestion", "ExitPlanMode")
+                if details["needs"]:
+                    details["attention_sequence"] += 1
                 text_details(json.dumps(block.get("input", {})), details)
         usage = message.get("usage") or {}
         if usage and message.get("id"):
@@ -105,6 +115,7 @@ def claude(record, details):
             details["tokens"] = totals
             details["context_tokens"] = sum(previous.get(k, 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
     if record.get("type") == "system" and record.get("subtype") in ("turn_duration", "stop_hook_summary"):
+        details["attention_sequence"] += 1
         details["running"] = False
 
 

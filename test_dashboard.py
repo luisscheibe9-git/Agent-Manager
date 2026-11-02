@@ -53,6 +53,7 @@ class DashboardTests(unittest.TestCase):
 
     def test_exact_working_to_needs_to_completed(self):
         self.fixture(False)
+        dashboard.action("read", {"id": SID, "read": False})
         self.assertEqual(dashboard.snapshot()["counts"]["working"], 1)
         dashboard.hook({"session_id": SID, "hook_event_name": "PermissionRequest"})
         self.assertEqual(dashboard.snapshot()["chats"][0]["state"], "needs")

@@ -141,7 +141,7 @@ def scan_claude(cutoff, catalog=None):
         if mt < cutoff:
             continue
         cached = catalog.cached_file(p, stat) if catalog else None
-        if cached and cached.get("parser_version") != 2:
+        if cached and cached.get("parser_version") != 3:
             cached = None
         if cached is None:
             extra = telemetry.empty()
@@ -175,7 +175,7 @@ def scan_claude(cutoff, catalog=None):
                 continue  # empty/locked/partially written source: retain the saved entry
             cached = {"title": title or (first_user or "(untitled)")[:80],
                       "last": (last or "")[:16000], "cwd": cwd, "role": role,
-                      "extra": telemetry.finish(extra), "parser_version": 2}
+                      "extra": telemetry.finish(extra), "parser_version": 3}
             if catalog:
                 catalog.cache_file(p, stat, cached)
         sid = os.path.basename(p)[:-6]
@@ -203,7 +203,7 @@ def scan_codex(cutoff, catalog=None, metadata=None):
         if mt < cutoff:
             continue
         cached = catalog.cached_file(p, stat) if catalog else None
-        if cached and cached.get("parser_version") != 2:
+        if cached and cached.get("parser_version") != 3:
             cached = None
         if cached is None:
             extra = telemetry.empty()
@@ -246,7 +246,7 @@ def scan_codex(cutoff, catalog=None, metadata=None):
             cached = {"id": sid, "title": (first_user or "(untitled)")[:80],
                       "last": (last or "")[:16000], "cwd": cwd, "role": role,
                       "running": extra["running"], "sidechain": sidechain,
-                      "extra": telemetry.finish(extra), "parser_version": 2}
+                      "extra": telemetry.finish(extra), "parser_version": 3}
             if catalog:
                 catalog.cache_file(p, stat, cached)
         sid = cached["id"]

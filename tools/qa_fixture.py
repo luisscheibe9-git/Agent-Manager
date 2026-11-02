@@ -67,6 +67,7 @@ def prepare():
     import inbox
     from catalog import Catalog
     with Catalog(str(data / 'chat_catalog.sqlite3')) as db:
+        db.set('todo_decisions', {})
         db.set('preferences', {'reminders_enabled':False,'reminder_delay_seconds':60,'keep_taskbar':True,'settle_days':7,'group_by_project':True})
     (root / 'ids.json').write_text(json.dumps(ids,indent=2),encoding='utf8')
     print(json.dumps({'home':str(home),'data':str(data),'port':8877}))

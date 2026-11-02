@@ -5,8 +5,10 @@ from pathlib import Path
 import re
 import subprocess
 import time
+import hashlib
 
 import inbox
+import t3_sessions
 from catalog import Catalog
 
 DEFAULTS = {"reminders_enabled": True, "reminder_delay_seconds": 180,
@@ -51,19 +53,29 @@ def snapshot():
     with Catalog(inbox.CATALOG) as db:
         archived = set(db.get("archived", []))
         records = {r["item"][1]: r for r in db.records()}
+        decisions = db.get("todo_decisions", {})
+    t3 = t3_sessions.scan(inbox.HOME)
     rows = []
     for source, sid, title, cwd, mt, last, role in items:
         state = inbox.item_state(sid, mt, role, sid in pins)
         hook = inbox.HOOKS.get(sid)
         version = max(mt, hook["timestamp"]) if hook else mt
         is_read = read.get(sid, 0) >= version
-        if state == "done":
-            state = "read" if is_read else "unread"
-        if state in ("settled", "idle"):
-            is_read = True
         if hook and hook["state"] == "needs":
             state = "needs"
         extra = inbox.DETAILS.get(sid, records.get(sid, {}).get("extra", {}))
+        # Routine token/tool progress must not resurrect a cleared task. A final
+        # answer, new turn, or new pending request changes this attention token.
+        attention = hashlib.sha256(json.dumps([state,
+                    last if state not in ("working", "needs") else None,
+                    extra.get("attention_sequence", 0),
+                    hook["timestamp"] if hook and hook["state"] == "needs" else None],
+                    sort_keys=True).encode()).hexdigest()
+        decision = decisions.get(sid, {})
+        if decision.get("attention") == attention:
+            is_read = decision.get("done", False)
+        if state == "done" or state == "settled" and not is_read:
+            state = "read" if is_read else "unread"
         folder = (cwd or "").rstrip("/\\")
         project = re.split(r"[/\\]", folder)[-1] if folder else "No project"
         rows.append({"id": sid, "source": source, "title": title, "cwd": cwd or "",
@@ -71,13 +83,17 @@ def snapshot():
                      "updated_at": mt, "activity": version, "last": last or "",
                      "state": state, "read": is_read, "pinned": sid in pins,
                      "archived": sid in archived, "href": inbox.HREFS.get(sid, ""),
-                     "branch": extra.get("branch", ""), "details": extra})
+                     "branch": extra.get("branch", ""), "details": extra,
+                     "attention": attention, "managed_by_t3": (source, sid) in t3["sessions"]})
     rows.sort(key=lambda r: (not r["pinned"], -r["updated_at"]))
-    active = [r for r in rows if not r["archived"]]
+    active = [r for r in rows if not r["archived"] and not r["managed_by_t3"]]
+    todo = [r for r in active if not r["read"]]
     return {"chats": rows, "counts": {"total": len(active),
-            "needs": sum(r["state"] == "needs" for r in active),
-            "working": sum(r["state"] == "working" for r in active),
-            "unread": sum(r["state"] == "unread" for r in active)},
+            "todo": len(todo), "t3": sum(r["managed_by_t3"] and not r["archived"] for r in rows),
+            "needs": sum(r["state"] == "needs" for r in todo),
+            "working": sum(r["state"] == "working" for r in todo),
+            "unread": sum(r["state"] == "unread" for r in todo)},
+            "t3": {"status": t3["status"], "reason": t3["reason"]},
             "settings": prefs, "updated_at": time.time(), "version": 2,
             "title": os.environ.get("AGENT_MANAGER_LABEL", "Agent Manager")}
 
@@ -93,21 +109,32 @@ def action(name, body):
     sid = body.get("id")
     if name == "mark-all":
         marks = inbox.load_state()
-        for row in rows:
-            if not row["archived"] and row["state"] not in ("working", "needs"):
-                marks[row["id"]] = row["activity"]
+        with Catalog(inbox.CATALOG) as db:
+            decisions = db.get("todo_decisions", {})
+            for row in rows:
+                if not row["archived"] and not row["managed_by_t3"]:
+                    marks[row["id"]] = row["activity"]
+                    decisions[row["id"]] = {"attention": row["attention"], "done": True}
+            db.set("todo_decisions", decisions)
         inbox.save_state(marks)
         return {"ok": True}
     if sid not in by_id:
         raise ValueError("Chat no longer exists")
     row = by_id[sid]
     if name == "read":
+        done = body.get("read", True)
+        if not isinstance(done, bool):
+            raise ValueError("Expected read true or false")
         marks = inbox.load_state()
-        if body.get("read", True):
+        if done:
             marks[sid] = row["activity"]
         else:
             marks.pop(sid, None)
         inbox.save_state(marks)
+        with Catalog(inbox.CATALOG) as db:
+            decisions = db.get("todo_decisions", {})
+            decisions[sid] = {"attention": row["attention"], "done": done}
+            db.set("todo_decisions", decisions)
     elif name == "pin":
         if not isinstance(body.get("pinned"), bool):
             raise ValueError("Expected pinned true or false")
@@ -182,7 +209,7 @@ def notify_due(notify, now=None):
         relevant = []
         for row in data["chats"]:
             sid = row["id"]
-            if row["archived"] or row["state"] not in ("needs", "unread"):
+            if row["archived"] or row["read"] or row["managed_by_t3"] or row["state"] not in ("needs", "unread"):
                 db.db.execute("DELETE FROM reminders WHERE id=?", (sid,))
                 continue
             relevant.append(sid)

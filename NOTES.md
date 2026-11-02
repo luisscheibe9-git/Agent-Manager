@@ -37,8 +37,8 @@ tools/qa_fixture.py resets synthetic fixtures; tools/qa_update.py appends lifecy
 Screenshots notes/screenshots/todo-*.jpg contain synthetic data only.
 
 ## Git and next steps
-Existing local checkpoint c09fe67 restores black; base1d95cfd. Current To-do/T3 changes are uncommitted. Global rules now default to tested feature-branch commit/push, but project AGENTS.md and CLAUDE.md retain the old explicit-permission restriction. Asked Luis to remove the stale restriction and commit/push codex/simple-black; await an actual reply, not selected defaults.
-Next: deliver phone-sized screenshot/test results; reconcile Git instructions on reply.
+Luis explicitly authorized pushing the remaining To-do/T3 changes on 2026-11-02. The tested milestone is committed on codex/simple-black; blue/cloud changes in the primary checkout remain separate and paused.
+Next: continue product changes from this branch. Real reboot and provider deep-link handoff remain verification gaps.
 Limits: installed-app deep-link handoff, native badge/toast pixels and real reboot unverified. Browser policy blocked codex:// navigation during QA; click-to-clear still persisted and was observed.
 
 Phone deliverables: Downloads/Agent-Manager-Todo-T3-Preview.jpg and Agent-Manager-Todo-T3-Test-Report.md. Original small synthetic screenshot: notes/screenshots/todo-phone-preview.jpg. Private Drive preview: https://drive.google.com/file/d/1wa_OlDy3zkGlDUacw1wRYFnsnNBrVRZ1/view?usp=drivesdk . No public permissions added.
@@ -46,3 +46,4 @@ Phone deliverables: Downloads/Agent-Manager-Todo-T3-Preview.jpg and Agent-Manage
 ## Launch repair — 2026-11-02
 The app failed silently because Codex's shared Python runtime no longer contained pystray. Created D:/agent manager/.venv with requirements.txt; keep it ignored. black_launcher.py now hands off to that environment when invoked by the shared runtime. Desktop, Downloads and Startup Agent Manager.lnk now target D:/agent manager/.venv/Scripts/pythonw.exe and this checkout's black_launcher.py (Desktop/Downloads use --open). Startup now uses black, superseding the older blue-startup warning above. install-startup.ps1 defaults to the primary checkout's .venv. Rebuild environment using bundled python -m venv 'D:/agent manager/.venv', then .venv/Scripts/python.exe -m pip install -r requirements.txt. This environment still requires its base Python installation to remain installed.
 Verified native Chrome inbox visibly open, health version2 PID27104, 15 currently discovered saved chats,9to-dos,2T3; all43 regression tests pass. No chat states were cleared during repair. Original blue/cloud work remains paused and untouched except ignoring .venv. Desktop/Downloads shortcut filename: Agent Manager.lnk.
+
