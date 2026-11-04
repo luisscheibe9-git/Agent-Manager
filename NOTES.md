@@ -52,3 +52,7 @@ Verified native Chrome inbox visibly open, health version2 PID27104, 15 currentl
 - Cause of slow pin/done: each click did a full log scan (~1s, mostly opening ~140 files) inside the global lock, then the UI awaited another full scan. Rust was not needed.
 - Now: `dashboard.start_refresher()` (called by `tray.py`) rescans in a background thread every ~2s; `/api/state` serves `cached_snapshot()`. `dashboard.action` no longer scans or takes `DATA_LOCK`: it patches the cached row immediately and a writer thread persists (`_apply`). `_GEN` discards scans that started before an action. `web/app.js` updates optimistically (`optimistic()`/`pending` overrides for 8s).
 - Tests/one-shot tools never start the refresher, so `action` saves synchronously there. Measured pin/read: 5-40 ms (was 1-3 s). 43 tests pass.
+
+## 2026-11-03 Duplicate window at startup
+- Cause: `tray.py` `open_minimized()` launched a new Chrome `--app` window on every tray start without checking for an existing one (and Chrome can restore a saved copy of the window next to it), so restarts/logins left 2-3 "Chat inbox" windows. The mutex already prevented duplicate tray processes.
+- Fix: `open_minimized()` skips if a window exists; 10 s after launching, `taskbar.close_extra_windows()` closes any extras (`taskbar.find_windows()` returns all). Verified: 3 windows -> 1, two further restarts stay at 1. Not committed.

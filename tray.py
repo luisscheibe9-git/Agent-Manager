@@ -86,6 +86,8 @@ def window_open():
 
 
 def open_minimized():
+    if window_open():
+        return
     si = subprocess.STARTUPINFO()
     si.dwFlags = subprocess.STARTF_USESHOWWINDOW
     si.wShowWindow = 7  # SW_SHOWMINNOACTIVE
@@ -173,8 +175,10 @@ if __name__ == "__main__":
     inbox.ON_CONTROL = control
     if "--open" in sys.argv:
         open_window()
+        threading.Timer(10, lambda: taskbar.close_extra_windows(WINDOW_TITLE)).start()
     elif keep_open[0]:
         open_minimized()  # at login: start with the taskbar button (and its badge) ready
+        threading.Timer(10, lambda: taskbar.close_extra_windows(WINDOW_TITLE)).start()
     menu = pystray.Menu(
         pystray.MenuItem("Open inbox", open_window, default=True),
         pystray.MenuItem("Mark all read", mark_all),

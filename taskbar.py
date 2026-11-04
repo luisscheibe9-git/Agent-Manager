@@ -44,7 +44,7 @@ def _call(index, restype, argtypes, *args):
     return fn(pointer, *args)
 
 
-def find_window(title_part=None):
+def find_windows(title_part=None):
     found = []
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -59,7 +59,18 @@ def find_window(title_part=None):
         return True
 
     user32.EnumWindows(cb, 0)
+    return found
+
+
+def find_window(title_part=None):
+    found = find_windows(title_part)
     return found[0] if found else None
+
+
+def close_extra_windows(title_part=None):
+    """Keep one inbox window; Chrome may restore a saved copy next to the one we launch."""
+    for hwnd in find_windows(title_part)[1:]:
+        user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
 
 
 def set_badge(hwnd, image, label):
