@@ -95,6 +95,18 @@ class TodoTests(unittest.TestCase):
         dashboard.action('mark-all',{})
         self.assertEqual(dashboard.snapshot()['counts']['todo'],0)
 
+    def test_done_time_recorded_and_kept_by_mark_all(self):
+        self.fixture()
+        dashboard.action('read',{'id':SID,'read':False})
+        self.assertEqual(dashboard.snapshot()['chats'][0]['done_at'],0)
+        dashboard.action('read',{'id':SID,'read':True})
+        first=dashboard.snapshot()['chats'][0]['done_at']
+        self.assertGreater(first,0)
+        dashboard.action('mark-all',{})
+        self.assertEqual(dashboard.snapshot()['chats'][0]['done_at'],first)
+        dashboard.action('read',{'id':SID,'read':False})
+        self.assertEqual(dashboard.snapshot()['chats'][0]['done_at'],0)
+
     def test_attachment_only_title_is_readable(self):
         self.assertEqual(inbox.clean_title('[File: Lecture 9.pdf; ref=file_ab12]'), '(attachment) Lecture 9.pdf')
         self.assertEqual(inbox.clean_title('[File: a.pdf; ref=x] summarize this'), 'summarize this')

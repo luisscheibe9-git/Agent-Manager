@@ -144,6 +144,7 @@ def snapshot():
                      "project": project, "project_key": os.path.normcase(folder) or "__none__",
                      "updated_at": mt, "activity": version, "last": last or "",
                      "state": state, "read": is_read, "pinned": sid in pins,
+                     "done_at": decision.get("done_at", 0) if is_read else 0,
                      "archived": sid in archived, "href": inbox.HREFS.get(sid, ""),
                      "branch": extra.get("branch", ""), "details": extra,
                      "attention": attention, "managed_by_t3": (source, sid) in t3["sessions"]})
@@ -202,12 +203,12 @@ def _preview(name, body, rows, sid):
     """Validate and show the change in the cached list at once."""
     if name == "mark-all":
         for row in rows:
-            if not row["archived"] and not row["managed_by_t3"]:
-                _patch(row["id"], read=True)
+            if not row["archived"] and not row["managed_by_t3"] and not row["read"]:
+                _patch(row["id"], read=True, done_at=time.time())
     elif name == "read":
         if not isinstance(body.get("read", True), bool):
             raise ValueError("Expected read true or false")
-        _patch(sid, read=body.get("read", True))
+        _patch(sid, read=body.get("read", True), done_at=time.time() if body.get("read", True) else 0)
     elif name == "pin":
         if not isinstance(body.get("pinned"), bool):
             raise ValueError("Expected pinned true or false")
@@ -240,6 +241,7 @@ def _action(name, body):
 
 
 def _apply(name, body, rows, by_id, sid):
+    now = time.time()
     if name == "mark-all":
         marks = inbox.load_state()
         with Catalog(inbox.CATALOG) as db:
@@ -247,7 +249,8 @@ def _apply(name, body, rows, by_id, sid):
             for row in rows:
                 if not row["archived"] and not row["managed_by_t3"]:
                     marks[row["id"]] = row["activity"]
-                    decisions[row["id"]] = {"attention": row["attention"], "done": True}
+                    if not row["read"]:  # already-done chats keep their original done time
+                        decisions[row["id"]] = {"attention": row["attention"], "done": True, "done_at": now}
             db.set("todo_decisions", decisions)
         inbox.save_state(marks)
         return {"ok": True}
@@ -266,7 +269,7 @@ def _apply(name, body, rows, by_id, sid):
         inbox.save_state(marks)
         with Catalog(inbox.CATALOG) as db:
             decisions = db.get("todo_decisions", {})
-            decisions[sid] = {"attention": row["attention"], "done": done}
+            decisions[sid] = {"attention": row["attention"], "done": done, "done_at": now if done else 0}
             db.set("todo_decisions", decisions)
     elif name == "pin":
         if not isinstance(body.get("pinned"), bool):

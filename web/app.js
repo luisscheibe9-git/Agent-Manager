@@ -15,7 +15,7 @@ async function api(path,body) {
   if(!response.ok) throw new Error(data.error || 'Request failed');
   return data;
 }
-const fresh = {pin:b=>({pinned:b.pinned}), read:b=>({read:b.read})};
+const fresh = {pin:b=>({pinned:b.pinned}), read:b=>({read:b.read,done_at:b.read?Date.now()/1000:0})};
 const pending = new Map();
 function optimistic(path,body) {
   if(!state||!fresh[path]) return;
@@ -68,6 +68,13 @@ function rowHTML(row) {
   const title=href ? `<a class="title" href="${escapeHTML(href)}" title="${escapeHTML(row.title)}" data-action="open">${escapeHTML(row.title)}</a>` : (row.source==='Claude'&&!row.managed_by_t3 ? `<a class="title" href="#" title="No app link for this chat. Click to resume it in a terminal." data-action="resume">${escapeHTML(row.title)}</a>` : `<span class="title" title="${escapeHTML(row.title)}">${escapeHTML(row.title)}</span>`);
   return `<article class="row ${row.source==='Claude'?'Claude':'Codex'} ${escapeHTML(row.state)} ${row.managed_by_t3?'t3':''}" data-id="${id}" tabindex="0" aria-label="${escapeHTML(row.title)}, ${escapeHTML(labels[row.state]||row.state)}"><div class="top">${title}<div class="actions"><button data-action="pin" aria-label="${row.pinned?'Unpin':'Pin'} ${escapeHTML(row.title)}" aria-pressed="${row.pinned}">${row.pinned?'◆ Pinned':'◇ Pin'}</button><button data-action="read" aria-label="${row.read?'Return to to-do':'Mark done'} ${escapeHTML(row.title)}">${row.read?'↶ To-do':'✓ Done'}</button></div></div><div class="meta"><span class="state ${escapeHTML(row.state)}">${escapeHTML(labels[row.state]||row.state)}</span><span>${escapeHTML(row.project)}</span>${row.branch?`<span>⑂ ${escapeHTML(row.branch)}</span>`:''}<time>${escapeHTML(when(row.updated_at))}</time></div><div class="snippet">${escapeHTML(row.last||'No final answer yet.')}</div><div class="row-links"><details data-expand="preview:${id}" ${expanded.has('preview:'+row.id)?'open':''}><summary>Preview</summary><pre class="answer">${escapeHTML(row.last||'No final answer yet.')}</pre></details><details data-expand="details:${id}" ${expanded.has('details:'+row.id)?'open':''}><summary>Details</summary><div class="details-body"><p>${escapeHTML(row.cwd||'No project folder')}</p>${row.state==='needs'?'<p>Answer the pending question in the original app. Done clears it from this list only.</p>':''}${row.state==='interrupted'?'<p>This turn was active before Windows last started. Open the chat to resume.</p>':''}${tokenHTML(details,row.source)}<h3>Project context</h3><button data-action="context" ${loadingContexts.has(row.id)?'disabled':''}>${loadingContexts.has(row.id)?'Loading…':contexts.has(row.id)?'Refresh branch, PR & changes':'Load branch, PR & changes'}</button>${contexts.has(row.id)?contextHTML(contexts.get(row.id)):''}</div></details></div></article>`;
 }
+const RECENT_DAYS=7, RECENT_MAX=15;
+function doneHTML(row) {
+  const href=row.managed_by_t3?'':safeLink(row.href), id=escapeHTML(row.id);
+  const attrs=href?`href="${escapeHTML(href)}" data-action="open"`:row.source==='Claude'?'href="#" data-action="resume"':'';
+  const title=attrs?`<a class="title" ${attrs} title="${escapeHTML(row.title)}">${escapeHTML(row.title)}</a>`:`<span class="title">${escapeHTML(row.title)}</span>`;
+  return `<article class="row done-row ${row.source==='Claude'?'Claude':'Codex'}" data-id="${id}" tabindex="0"><div class="top">${title}<div class="actions"><button data-action="read" aria-label="Return to to-do ${escapeHTML(row.title)}">↶ To-do</button></div></div><div class="meta"><span>${escapeHTML(row.project)}</span><time>Done ${escapeHTML(when(row.done_at))}</time></div></article>`;
+}
 function render(force=false) {
   if(!state) return;
   const chats=state.chats.filter(row=>!row.archived);
@@ -84,7 +91,10 @@ function render(force=false) {
   const rows=filtered.filter(row=>!row.managed_by_t3&&(showAll||!row.read)), t3=filtered.filter(row=>row.managed_by_t3);
   $('t3-section').hidden=!t3.length; $('t3-summary').textContent='T3 Code · '+t3.length+' chat'+(t3.length===1?'':'s');
   $('summary').textContent=`${rows.length} ${showAll?'saved chat':'to-do'}${rows.length===1?'':'s'} · ${state.counts.needs} need your input · ${state.counts.working} working`;
-  const signature=JSON.stringify([rows,t3,state.settings.group_by_project,project,query,showAll]);
+  const cutoff=Date.now()/1000-RECENT_DAYS*86400;
+  const recentDone=filtered.filter(row=>!row.managed_by_t3&&row.read&&row.done_at>cutoff).sort((a,b)=>b.done_at-a.done_at).slice(0,RECENT_MAX);
+  $('recent-done').hidden=!recentDone.length; $('recent-summary').textContent='Recently done · '+recentDone.length;
+  const signature=JSON.stringify([rows,t3,recentDone.map(r=>[r.id,r.done_at,r.title]),state.settings.group_by_project,project,query,showAll]);
   if(!force && signature===rendered) return;
   const focus=document.activeElement, focusId=focus?.closest('[data-id]')?.dataset.id, focusAction=focus?.dataset.action;
   rendered=signature;
@@ -97,6 +107,7 @@ function render(force=false) {
   }
   const recent=rows.filter(row=>!showAll||row.state!=='settled'||row.pinned), settled=rows.filter(row=>showAll&&row.state==='settled'&&!row.pinned);
   $('chats').innerHTML=rows.length ? groups(recent)+(settled.length?`<details class="settled" data-expand="settled" ${expanded.has('settled')||query?'open':''}><summary>Settled · ${settled.length} saved chat${settled.length===1?'':'s'}</summary>${groups(settled)}</details>`:'') : '<p class="empty">'+(query||project?'No matching chats.':showAll?'No saved chats.':'All done. New chat activity will appear here.')+'</p>';
+  $('recent-list').innerHTML=recentDone.map(doneHTML).join('');
   $('t3-chats').innerHTML=t3.map(rowHTML).join('');
   $('chat-lists').querySelectorAll('details[data-expand]').forEach(details=>details.addEventListener('toggle',()=>{if(details.open) expanded.add(details.dataset.expand); else expanded.delete(details.dataset.expand);}));
   if(focusId) { const article=$('chat-lists').querySelector(`[data-id="${CSS.escape(focusId)}"]`); const next=focusAction?article?.querySelector(`[data-action="${CSS.escape(focusAction)}"]`):article; next?.focus({preventScroll:true}); }

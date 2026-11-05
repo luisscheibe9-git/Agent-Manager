@@ -62,3 +62,8 @@ Verified native Chrome inbox visibly open, health version2 PID27104, 15 currentl
 - Titles: `inbox.clean_title()` skips `[File: ...]` placeholders, Codex `# Files mentioned...`/`## My request:` blocks, `<t3_context>` tails; Codex scan skips the `# AGENTS.md instructions` preamble; `app_title()` ignores app/custom titles that are only placeholders. Parser version is now 5 (cache rebuilds once).
 - Done persistence verified: restarting the tray keeps 150 read / 15 to-do unchanged. Added `dashboard.flush()` so queued clicks are written before a graceful quit/restart. Hard kills can lose a click made <1 s earlier.
 - Tests: 45 pass (`python -X utf8 -m unittest test_inbox test_dashboard test_todo test_t3_sessions test_black_launcher`).
+
+## 2026-11-04 Recently done section
+- Done decisions now store `done_at` (in `todo_decisions`); snapshot rows expose `done_at` (0 if not done or done before this feature). Mark-all keeps the original `done_at` of already-done chats.
+- UI: open-by-default "Recently done · N" box above the list (`#recent-done` in `web/index.html`, `doneHTML()` in `web/app.js`): chats done in the last 7 days, newest first, max 15, with a "↶ To-do" undo. Respects search/project filters. `RECENT_DAYS`/`RECENT_MAX` constants in app.js. Chats marked done before this change do not appear.
+- 46 tests pass. Not committed.
