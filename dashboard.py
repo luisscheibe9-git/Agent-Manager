@@ -13,6 +13,7 @@ import inbox
 import t3_sessions
 from catalog import Catalog
 
+T3_PATH = re.compile(r"[\\/]\.t3[\\/]")  # chats started inside T3 Code (scratch/worktree folders)
 DEFAULTS = {"reminders_enabled": True, "reminder_delay_seconds": 180,
             "keep_taskbar": True, "settle_days": 7, "group_by_project": True}
 
@@ -147,7 +148,7 @@ def snapshot():
                      "done_at": decision.get("done_at", 0) if is_read else 0,
                      "archived": sid in archived, "href": inbox.HREFS.get(sid, ""),
                      "branch": extra.get("branch", ""), "details": extra,
-                     "attention": attention, "managed_by_t3": (source, sid) in t3["sessions"]})
+                     "attention": attention, "managed_by_t3": (source, sid) in t3["sessions"] or bool(T3_PATH.search(cwd or ""))})
     rows.sort(key=lambda r: (not r["pinned"], -r["updated_at"]))
     return {"chats": rows, "counts": counts(rows),
             "t3": {"status": t3["status"], "reason": t3["reason"]},

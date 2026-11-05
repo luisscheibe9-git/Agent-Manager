@@ -67,3 +67,7 @@ Verified native Chrome inbox visibly open, health version2 PID27104, 15 currentl
 - Done decisions now store `done_at` (in `todo_decisions`); snapshot rows expose `done_at` (0 if not done or done before this feature). Mark-all keeps the original `done_at` of already-done chats.
 - UI: open-by-default "Recently done · N" box above the list (`#recent-done` in `web/index.html`, `doneHTML()` in `web/app.js`): chats done in the last 7 days, newest first, max 15, with a "↶ To-do" undo. Respects search/project filters. `RECENT_DAYS`/`RECENT_MAX` constants in app.js. Chats marked done before this change do not appear.
 - 46 tests pass. Not committed.
+
+## 2026-11-04 T3 chats out of the main feed
+- T3 chats (`managed_by_t3`) now also include any chat whose folder is under `~/.t3/` (`dashboard.T3_PATH`), since those cannot be opened from here. They are excluded from the main list, the badge, and reminders.
+- UI: a large amber banner at the very top ("N unresolved T3 Code chats"; `#t3-section` in `web/index.html`) expands to the unresolved ones, each with a Done button (resolve = mark done). Hidden when none. The banner count ignores search/project filters. The earlier resume-in-terminal link therefore no longer applies to T3 scratch chats (Claude Desktop's own `scratch-workspaces` chats are not T3 and stay in the feed). Not committed.

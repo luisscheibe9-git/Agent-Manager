@@ -89,12 +89,13 @@ function render(force=false) {
   document.title=(count?'('+count+') ':'')+(state.title==='Agent Manager'?'Chat inbox':state.title||'Chat inbox');
   const filtered=chats.filter(row=>(!project||row.project_key===project)&&(!query||(row.title+' '+row.project+' '+row.last).toLocaleLowerCase().includes(query.toLocaleLowerCase())));
   const rows=filtered.filter(row=>!row.managed_by_t3&&(showAll||!row.read)), t3=filtered.filter(row=>row.managed_by_t3);
-  $('t3-section').hidden=!t3.length; $('t3-summary').textContent='T3 Code · '+t3.length+' chat'+(t3.length===1?'':'s');
+  const t3open=chats.filter(row=>row.managed_by_t3&&!row.read);
+  $('t3-section').hidden=!t3open.length; $('t3-summary').textContent=t3open.length+' unresolved T3 Code chat'+(t3open.length===1?'':'s');
   $('summary').textContent=`${rows.length} ${showAll?'saved chat':'to-do'}${rows.length===1?'':'s'} · ${state.counts.needs} need your input · ${state.counts.working} working`;
   const cutoff=Date.now()/1000-RECENT_DAYS*86400;
   const recentDone=filtered.filter(row=>!row.managed_by_t3&&row.read&&row.done_at>cutoff).sort((a,b)=>b.done_at-a.done_at).slice(0,RECENT_MAX);
   $('recent-done').hidden=!recentDone.length; $('recent-summary').textContent='Recently done · '+recentDone.length;
-  const signature=JSON.stringify([rows,t3,recentDone.map(r=>[r.id,r.done_at,r.title]),state.settings.group_by_project,project,query,showAll]);
+  const signature=JSON.stringify([rows,t3open,recentDone.map(r=>[r.id,r.done_at,r.title]),state.settings.group_by_project,project,query,showAll]);
   if(!force && signature===rendered) return;
   const focus=document.activeElement, focusId=focus?.closest('[data-id]')?.dataset.id, focusAction=focus?.dataset.action;
   rendered=signature;
@@ -108,7 +109,7 @@ function render(force=false) {
   const recent=rows.filter(row=>!showAll||row.state!=='settled'||row.pinned), settled=rows.filter(row=>showAll&&row.state==='settled'&&!row.pinned);
   $('chats').innerHTML=rows.length ? groups(recent)+(settled.length?`<details class="settled" data-expand="settled" ${expanded.has('settled')||query?'open':''}><summary>Settled · ${settled.length} saved chat${settled.length===1?'':'s'}</summary>${groups(settled)}</details>`:'') : '<p class="empty">'+(query||project?'No matching chats.':showAll?'No saved chats.':'All done. New chat activity will appear here.')+'</p>';
   $('recent-list').innerHTML=recentDone.map(doneHTML).join('');
-  $('t3-chats').innerHTML=t3.map(rowHTML).join('');
+  $('t3-chats').innerHTML=t3open.map(rowHTML).join('');
   $('chat-lists').querySelectorAll('details[data-expand]').forEach(details=>details.addEventListener('toggle',()=>{if(details.open) expanded.add(details.dataset.expand); else expanded.delete(details.dataset.expand);}));
   if(focusId) { const article=$('chat-lists').querySelector(`[data-id="${CSS.escape(focusId)}"]`); const next=focusAction?article?.querySelector(`[data-action="${CSS.escape(focusAction)}"]`):article; next?.focus({preventScroll:true}); }
 }
