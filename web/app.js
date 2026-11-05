@@ -26,7 +26,7 @@ function optimistic(path,body) {
 }
 function applyLocal() {
   state.chats.sort((a,b)=>(b.pinned-a.pinned)||(b.updated_at-a.updated_at));
-  const active=state.chats.filter(r=>!r.archived&&!r.managed_by_t3), todo=active.filter(r=>!r.read);
+  const active=state.chats.filter(r=>!r.archived&&!r.managed_by_t3&&!r.automated), todo=active.filter(r=>!r.read);
   Object.assign(state.counts,{todo:todo.length,needs:todo.filter(r=>r.state==='needs').length,working:todo.filter(r=>r.state==='working').length,unread:todo.filter(r=>r.state==='unread').length});
   render(true);
 }
@@ -88,12 +88,12 @@ function render(force=false) {
   $('unread-count').textContent=count; $('unread-count').classList.toggle('zero',count===0);
   document.title=(count?'('+count+') ':'')+(state.title==='Agent Manager'?'Chat inbox':state.title||'Chat inbox');
   const filtered=chats.filter(row=>(!project||row.project_key===project)&&(!query||(row.title+' '+row.project+' '+row.last).toLocaleLowerCase().includes(query.toLocaleLowerCase())));
-  const rows=filtered.filter(row=>!row.managed_by_t3&&(showAll||!row.read)), t3=filtered.filter(row=>row.managed_by_t3);
+  const rows=filtered.filter(row=>!row.managed_by_t3&&(showAll||(!row.read&&!row.automated))), t3=filtered.filter(row=>row.managed_by_t3);
   const t3open=chats.filter(row=>row.managed_by_t3&&!row.read);
   $('t3-section').hidden=!t3open.length; $('t3-summary').textContent=t3open.length+' unresolved T3 Code chat'+(t3open.length===1?'':'s');
   $('summary').textContent=`${rows.length} ${showAll?'saved chat':'to-do'}${rows.length===1?'':'s'} · ${state.counts.needs} need your input · ${state.counts.working} working`;
   const cutoff=Date.now()/1000-RECENT_DAYS*86400;
-  const recentDone=filtered.filter(row=>!row.managed_by_t3&&row.read&&row.done_at>cutoff).sort((a,b)=>b.done_at-a.done_at).slice(0,RECENT_MAX);
+  const recentDone=filtered.filter(row=>!row.managed_by_t3&&!row.automated&&row.read&&row.done_at>cutoff).sort((a,b)=>b.done_at-a.done_at).slice(0,RECENT_MAX);
   $('recent-done').hidden=!recentDone.length; $('recent-summary').textContent='Recently done · '+recentDone.length;
   const signature=JSON.stringify([rows,t3open,recentDone.map(r=>[r.id,r.done_at,r.title]),state.settings.group_by_project,project,query,showAll]);
   if(!force && signature===rendered) return;

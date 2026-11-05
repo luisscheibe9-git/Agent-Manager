@@ -146,7 +146,7 @@ def codex_metadata():
             from pathlib import Path
             with closing(sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
                 columns = {row[1] for row in db.execute("PRAGMA table_info(threads)")}
-                wanted = [c for c in ("id", "title", "cwd", "archived", "git_branch", "git_origin_url", "tokens_used") if c in columns]
+                wanted = [c for c in ("id", "title", "cwd", "archived", "git_branch", "git_origin_url", "tokens_used", "source", "thread_source") if c in columns]
                 if "id" not in wanted:
                     continue
                 for values in db.execute("SELECT " + ",".join(wanted) + " FROM threads"):
@@ -212,7 +212,7 @@ def scan_claude(cutoff, catalog=None):
             continue
         meta = meta or {}
         mt = (meta.get("lastTurnEdgeAt") or meta.get("lastActivityAt") or mt * 1000) / 1000
-        DETAILS[sid] = cached["extra"]
+        DETAILS[sid] = dict(cached["extra"], automated=bool(meta.get("scheduledTaskId")) and not meta.get("scheduledRunContinued"))
         RUNNING[sid] = cached["extra"]["running"]
         NEEDS[sid] = bool(meta.get("interruptedAwaitingPerson")) or cached["extra"]["needs"]
         out.append(("Claude", sid, app_title(meta.get("title"), cached["title"]), meta.get("cwd") or cached["cwd"], mt, cached["last"], cached["role"]))
@@ -285,6 +285,7 @@ def scan_codex(cutoff, catalog=None, metadata=None):
         NEEDS[sid] = cached["extra"]["needs"]
         DETAILS[sid] = dict(cached["extra"])
         DETAILS[sid]["branch"] = meta.get("git_branch") or DETAILS[sid]["branch"]
+        DETAILS[sid]["automated"] = meta.get("thread_source") not in (None, "user", "voice_chat") or meta.get("source") == "exec"
         if not DETAILS[sid]["tokens"] and meta.get("tokens_used"):
             DETAILS[sid]["tokens"] = {"total_tokens": meta["tokens_used"]}
         out.append(("Codex", sid, app_title(meta.get("title"), cached["title"])[:80],

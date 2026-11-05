@@ -44,7 +44,7 @@ def update_settings(values):
 
 
 def counts(rows):
-    active = [r for r in rows if not r["archived"] and not r["managed_by_t3"]]
+    active = [r for r in rows if not r["archived"] and not r["managed_by_t3"] and not r["automated"]]
     todo = [r for r in active if not r["read"]]
     return {"total": len(active), "todo": len(todo),
             "t3": sum(r["managed_by_t3"] and not r["archived"] for r in rows),
@@ -148,7 +148,7 @@ def snapshot():
                      "done_at": decision.get("done_at", 0) if is_read else 0,
                      "archived": sid in archived, "href": inbox.HREFS.get(sid, ""),
                      "branch": extra.get("branch", ""), "details": extra,
-                     "attention": attention, "managed_by_t3": (source, sid) in t3["sessions"] or bool(T3_PATH.search(cwd or ""))})
+                     "attention": attention, "automated": bool(extra.get("automated")), "managed_by_t3": (source, sid) in t3["sessions"] or bool(T3_PATH.search(cwd or ""))})
     rows.sort(key=lambda r: (not r["pinned"], -r["updated_at"]))
     return {"chats": rows, "counts": counts(rows),
             "t3": {"status": t3["status"], "reason": t3["reason"]},
@@ -204,7 +204,7 @@ def _preview(name, body, rows, sid):
     """Validate and show the change in the cached list at once."""
     if name == "mark-all":
         for row in rows:
-            if not row["archived"] and not row["managed_by_t3"] and not row["read"]:
+            if not row["archived"] and not row["managed_by_t3"] and not row["automated"] and not row["read"]:
                 _patch(row["id"], read=True, done_at=time.time())
     elif name == "read":
         if not isinstance(body.get("read", True), bool):
@@ -346,7 +346,7 @@ def notify_due(notify, now=None):
         relevant = []
         for row in data["chats"]:
             sid = row["id"]
-            if row["archived"] or row["read"] or row["managed_by_t3"] or row["state"] not in ("needs", "unread"):
+            if row["archived"] or row["read"] or row["managed_by_t3"] or row["automated"] or row["state"] not in ("needs", "unread"):
                 db.db.execute("DELETE FROM reminders WHERE id=?", (sid,))
                 continue
             relevant.append(sid)
