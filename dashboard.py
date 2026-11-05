@@ -118,6 +118,7 @@ def snapshot():
     t3 = t3_sessions.scan(inbox.HOME)
     rows = []
     for source, sid, title, cwd, mt, last, role in items:
+        title = inbox.app_title(title, None) or inbox.clean_title(title)  # retained rows can hold old placeholder titles
         state = inbox.item_state(sid, mt, role, sid in pins)
         hook = inbox.HOOKS.get(sid)
         version = max(mt, hook["timestamp"]) if hook else mt
@@ -154,6 +155,8 @@ def snapshot():
 
 
 def action(name, body):
+    if name == "resume":
+        return resume(body.get("id"))
     if name in ("settings", "hook"):
         with inbox.DATA_LOCK:
             return update_settings(body) if name == "settings" else hook(body)
@@ -171,8 +174,28 @@ def _writer():
                 _apply(*job)
         except Exception as exc:
             inbox.log("action error: " + repr(exc))
+        finally:
+            _QUEUE.task_done()
         _GEN[0] += 1
         _WAKE.set()
+
+
+def flush():
+    """Wait for queued clicks to reach disk (called before the app exits)."""
+    _QUEUE.join()
+
+
+def resume(sid):
+    """Open a terminal running `claude --resume` for a Claude chat that has no app deep link."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,150}", str(sid)):
+        raise ValueError("Invalid chat id")
+    row = next((r for r in cached_snapshot()["chats"] if r["id"] == sid), None)
+    if row is None or row["source"] != "Claude":
+        raise ValueError("Only Claude chats can be resumed in a terminal")
+    cwd = row["cwd"] if os.path.isdir(row["cwd"] or "") else inbox.HOME
+    subprocess.Popen(["powershell", "-NoExit", "-Command", f"claude --resume {sid}"],
+                     cwd=cwd, creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+    return {"ok": True}
 
 
 def _preview(name, body, rows, sid):

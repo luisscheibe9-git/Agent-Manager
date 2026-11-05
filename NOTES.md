@@ -56,3 +56,9 @@ Verified native Chrome inbox visibly open, health version2 PID27104, 15 currentl
 ## 2026-11-03 Duplicate window at startup
 - Cause: `tray.py` `open_minimized()` launched a new Chrome `--app` window on every tray start without checking for an existing one (and Chrome can restore a saved copy of the window next to it), so restarts/logins left 2-3 "Chat inbox" windows. The mutex already prevented duplicate tray processes.
 - Fix: `open_minimized()` skips if a window exists; 10 s after launching, `taskbar.close_extra_windows()` closes any extras (`taskbar.find_windows()` returns all). Verified: 3 windows -> 1, two further restarts stay at 1. Not committed.
+
+## 2026-11-04 Dead link, titles, persistence
+- Dead title link: Claude chats started in T3 Code (cwd `~/.t3/scratch/...`) have no desktop-app session file, so `href_for` has no `claude://` link. Now their title is a link that POSTs `/api/resume`, which opens a PowerShell window running `claude --resume <id>` in the chat's folder (`dashboard.resume`, id validated, Claude rows only) and marks it done.
+- Titles: `inbox.clean_title()` skips `[File: ...]` placeholders, Codex `# Files mentioned...`/`## My request:` blocks, `<t3_context>` tails; Codex scan skips the `# AGENTS.md instructions` preamble; `app_title()` ignores app/custom titles that are only placeholders. Parser version is now 5 (cache rebuilds once).
+- Done persistence verified: restarting the tray keeps 150 read / 15 to-do unchanged. Added `dashboard.flush()` so queued clicks are written before a graceful quit/restart. Hard kills can lose a click made <1 s earlier.
+- Tests: 45 pass (`python -X utf8 -m unittest test_inbox test_dashboard test_todo test_t3_sessions test_black_launcher`).

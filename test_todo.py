@@ -95,6 +95,28 @@ class TodoTests(unittest.TestCase):
         dashboard.action('mark-all',{})
         self.assertEqual(dashboard.snapshot()['counts']['todo'],0)
 
+    def test_attachment_only_title_is_readable(self):
+        self.assertEqual(inbox.clean_title('[File: Lecture 9.pdf; ref=file_ab12]'), '(attachment) Lecture 9.pdf')
+        self.assertEqual(inbox.clean_title('[File: a.pdf; ref=x] summarize this'), 'summarize this')
+        self.assertEqual(inbox.clean_title('plain  text'), 'plain text')
+        codex = '\n# Files mentioned by the user:\n\n## WSR.docx: C:/x/WSR.docx\n\n## My request:\nfill out a wsr\n'
+        self.assertEqual(inbox.clean_title(codex), 'fill out a wsr')
+        self.assertEqual(inbox.clean_title('# Files mentioned by the user:\n\n## WSR.docx: C:/x'), '(attachment) WSR.docx')
+        self.assertEqual(inbox.clean_title('quick rundown <t3_context version="1"> <context'), 'quick rundown')
+
+    def test_resume_opens_terminal_only_for_valid_claude_chat(self):
+        self.fixture()
+        with patch.object(dashboard.subprocess, 'Popen') as popen:
+            with self.assertRaises(ValueError):
+                dashboard.action('resume', {'id': 'x; calc'})
+            row = dashboard.snapshot()['chats'][0]
+            if row['source'] == 'Claude':
+                dashboard.action('resume', {'id': row['id']})
+                self.assertIn(f"claude --resume {row['id']}", popen.call_args[0][0][-1])
+            else:
+                with self.assertRaises(ValueError):
+                    dashboard.action('resume', {'id': row['id']})
+
 
 if __name__ == '__main__':
     unittest.main()

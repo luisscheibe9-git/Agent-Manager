@@ -91,6 +91,34 @@ def log(msg):
         pass
 
 
+ATTACHMENT = re.compile(r"\[(?:File|Image|Attachment)[^\]]*\]")
+
+
+def clean_title(text):
+    """Title from the user's real request: skips attachment blocks, placeholders and injected context."""
+    request = re.search(r"^## My request[^\n]*:\s*(.+)", text, re.M | re.S)
+    if request and request.group(1).strip():
+        text = request.group(1)
+    elif text.lstrip().startswith("# Files mentioned"):
+        names = re.findall(r"^## ([^\n:]+):", text, re.M)
+        return ("(attachment) " + names[0])[:80] if names else "(attachment)"
+    head = re.split(r"<t3_context", text)[0]
+    text = head if head.strip() else text
+    text = " ".join(text.split())
+    rest = ATTACHMENT.sub("", text).strip(" ;")
+    if rest:
+        return rest[:80]
+    m = re.search(r"\[(?:File|Image): ([^;\]]+)", text)
+    return ("(attachment) " + m.group(1))[:80] if m else text[:80]
+
+
+def app_title(title, parsed):
+    """Prefer the app's own title unless it is just a pasted attachment block or injected context."""
+    if title and not re.match(r"\s*(?:# Files mentioned|\[(?:File|Image|Attachment))", title) and "<t3_context" not in title:
+        return title
+    return parsed
+
+
 def text_of(content):
     if isinstance(content, str):
         return content
@@ -141,7 +169,7 @@ def scan_claude(cutoff, catalog=None):
         if mt < cutoff:
             continue
         cached = catalog.cached_file(p, stat) if catalog else None
-        if cached and cached.get("parser_version") != 3:
+        if cached and cached.get("parser_version") != 5:
             cached = None
         if cached is None:
             extra = telemetry.empty()
@@ -173,9 +201,9 @@ def scan_claude(cutoff, catalog=None):
                         role = "assistant"
             if not (title or first_user or last):
                 continue  # empty/locked/partially written source: retain the saved entry
-            cached = {"title": title or (first_user or "(untitled)")[:80],
+            cached = {"title": app_title(title, clean_title(first_user or "(untitled)")),
                       "last": (last or "")[:16000], "cwd": cwd, "role": role,
-                      "extra": telemetry.finish(extra), "parser_version": 3}
+                      "extra": telemetry.finish(extra), "parser_version": 5}
             if catalog:
                 catalog.cache_file(p, stat, cached)
         sid = os.path.basename(p)[:-6]
@@ -187,7 +215,7 @@ def scan_claude(cutoff, catalog=None):
         DETAILS[sid] = cached["extra"]
         RUNNING[sid] = cached["extra"]["running"]
         NEEDS[sid] = bool(meta.get("interruptedAwaitingPerson")) or cached["extra"]["needs"]
-        out.append(("Claude", sid, meta.get("title") or cached["title"], meta.get("cwd") or cached["cwd"], mt, cached["last"], cached["role"]))
+        out.append(("Claude", sid, app_title(meta.get("title"), cached["title"]), meta.get("cwd") or cached["cwd"], mt, cached["last"], cached["role"]))
     return out
 
 
@@ -203,7 +231,7 @@ def scan_codex(cutoff, catalog=None, metadata=None):
         if mt < cutoff:
             continue
         cached = catalog.cached_file(p, stat) if catalog else None
-        if cached and cached.get("parser_version") != 3:
+        if cached and cached.get("parser_version") != 5:
             cached = None
         if cached is None:
             extra = telemetry.empty()
@@ -235,7 +263,7 @@ def scan_codex(cutoff, catalog=None, metadata=None):
                             role = "assistant"
                 elif o.get("type") == "response_item" and pl.get("type") == "message":
                     s = text_of(pl.get("content")).strip()
-                    if pl.get("role") == "user" and s and not s.startswith("<"):
+                    if pl.get("role") == "user" and s and not s.startswith(("<", "# AGENTS.md")):
                         first_user = first_user or s
                         role = "user"
                     elif pl.get("role") == "assistant" and s and pl.get("phase") != "commentary":
@@ -243,10 +271,10 @@ def scan_codex(cutoff, catalog=None, metadata=None):
                         role = "assistant"
             if not (first_user or last):
                 continue  # do not replace a saved preview with an incomplete source
-            cached = {"id": sid, "title": (first_user or "(untitled)")[:80],
+            cached = {"id": sid, "title": clean_title(first_user or "(untitled)"),
                       "last": (last or "")[:16000], "cwd": cwd, "role": role,
                       "running": extra["running"], "sidechain": sidechain,
-                      "extra": telemetry.finish(extra), "parser_version": 3}
+                      "extra": telemetry.finish(extra), "parser_version": 5}
             if catalog:
                 catalog.cache_file(p, stat, cached)
         sid = cached["id"]
@@ -259,7 +287,7 @@ def scan_codex(cutoff, catalog=None, metadata=None):
         DETAILS[sid]["branch"] = meta.get("git_branch") or DETAILS[sid]["branch"]
         if not DETAILS[sid]["tokens"] and meta.get("tokens_used"):
             DETAILS[sid]["tokens"] = {"total_tokens": meta["tokens_used"]}
-        out.append(("Codex", sid, (meta.get("title") or cached["title"])[:80],
+        out.append(("Codex", sid, app_title(meta.get("title"), cached["title"])[:80],
                     meta.get("cwd") or cached["cwd"], mt, cached["last"], cached["role"]))
     return out
 
@@ -656,7 +684,7 @@ class H(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/api/"):
             name = self.path[5:]
-            if name not in ("read", "pin", "archive", "mark-all", "settings", "hook"):
+            if name not in ("read", "pin", "archive", "mark-all", "settings", "hook", "resume"):
                 self.reply(404, {"error": "Not found"})
                 return
             self.reply(200, dashboard.action(name, body))

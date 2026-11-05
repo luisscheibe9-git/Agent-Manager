@@ -190,6 +190,7 @@ if __name__ == "__main__":
     inbox.ON_NOTIFY = icon.notify
     icon.run(setup=loop)
     STOP.set()
+    dashboard.flush()
     if server["http"]:
         server["http"].shutdown()
         server["http"].server_close()
