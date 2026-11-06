@@ -1,4 +1,16 @@
-# Agent Manager: simple black to-do list
+# Chat Inbox (Agent Manager): handoff notes
+
+## CURRENT STATE (2026-11-05) - read this block first
+- What: Windows tray app + local dashboard at http://localhost:8765 that turns Luis's Claude and Codex chats into a to-do list. Repo (PUBLIC): https://github.com/luisscheibe9-git/Agent-Manager. Checkout: `%USERPROFILE%\Desktop\Chat_Inbox`, branch `codex/simple-black` (main is fast-forwarded to it after pushes). Commit author email is his personal address (set in repo git config; never use the Cal Poly address).
+- Full detail, run/restart/test steps, decisions, open items and gotchas: `notes/HANDOFF.md`. Paste-ready prompt for a new chat: `notes/NEW_CHAT_PROMPT.md`. The sections further down are chronological history and may be outdated (for example the old "opening a chat clears it" rule and old machine paths).
+- Behavior in one paragraph: only Done resolves a chat (new activity brings it back); T3 chats, scheduled/automated chats and snoozed chats are kept off the list; flat list with a project label above each chat, each project has one saved tint; drag the grip to reorder; down arrow sends a chat to the bottom; chips show tokens, context % and an estimated "Limit %"; ideas ("+ New to-do") become thin rows you can turn into Claude/Codex chats; blue banner shows T3 Code's unresolved threads; Recently done and Snoozed blocks sit under the list; toolbar is behind a small triangle; header shows "N done today".
+- Run: Task Scheduler task "Chat Inbox" runs `pythonw tray.py` (Python313). Tests: `python -X utf8 -m unittest test_inbox test_dashboard test_todo test_t3_sessions test_black_launcher` (54 pass).
+- Rules: repo is public (no private data); do not commit/push without Luis's yes (docs excepted); never mutate his real list while testing; do not commit his local AGENTS.md/CLAUDE.md edits.
+- Next: see "Open items" in `notes/HANDOFF.md` (keyboard shortcuts, usage meter, quick filters, reboot test, deep-link verification, LICENSE/README, cloud view parked).
+
+---
+(older notes below)
+
 
 Updated 2026-10-30. Branch: codex/simple-black. Read this first.
 Source: C:/Users/Luis/.codex/worktrees/simple-black/agent manager.
@@ -118,4 +130,22 @@ Verified native Chrome inbox visibly open, health version2 PID27104, 15 currentl
 - 49 tests pass. Not committed.
 
 ## 2026-11-05 Ideas as compact rows
-- "+ New to-do" opens a composer (textarea + green check). Enter (Shift+Enter for a new line) or the check adds the idea; Esc/x cancels; an empty composer adds nothing. Each idea then shows as a thin row (purple dot, first line as title, "Idea" chip, time, "Sent to X" once used) in the "Ideas" block above the chats. Click a row to expand it: editable text, "Make this a chat" buttons (Claude chat, Claude Code, Codex) and delete. Multiple ideas supported. Code: web/app.js (composerHTML, ideaHTML, enderIdeas), web/styles.css (.idea*).
+- "+ New to-do" opens a composer (textarea + green check). Enter (Shift+Enter for a new line) or the check adds the idea; Esc/x cancels; an empty composer adds nothing. Each idea then shows as a thin row (purple dot, first line as title, "Idea" chip, time, "Sent to X" once used) in the "Ideas" block above the chats. Click a row to expand it: editable text, "Make this a chat" buttons (Claude chat, Claude Code, Codex) and delete. Multiple ideas supported. Code: web/app.js (composerHTML, ideaHTML, 
+enderIdeas), web/styles.css (.idea*).
+
+## 2026-11-05 Snooze, reorder, done today, collapsed toolbar, Limit chip
+- Snooze: each card has Snooze > 1 hour / 1 day (snooze/unsnooze actions; catalog setting snoozes {id: epoch}; row field snoozed_until). Snoozed chats leave the to-do list, badge and reminders until the time passes, then return on their own; a collapsed "Snoozed" block under the chats lists them with "Wake now".
+- Ideas can be reordered by dragging their rows (idea-reorder action; HTML5 drag in web/app.js).
+- Header shows "N done today" (local midnight, from done_at). The search/project/All chats/Mark all done/Settings row and the summary are hidden behind a small triangle next to the badge (#toolbar-panel, #toolbar-toggle, remembered in localStorage lack-inbox-panel; closing it resets search/project/All chats; / opens it and focuses search).
+- The orange usage chip now reads "Limit N%" (tooltip still explains it is an estimate of the 5-hour limit).
+- 52 tests pass. Not committed.
+
+## 2026-11-05 Flat list with project labels; drag to reorder chats
+- The to-do list is no longer grouped: every chat card has its project name as a small label above it, in one flat list (pinned first). The "Group by project" footer checkbox was removed (setting `group_by_project` is now unused).
+- Chats can be dragged by the dotted grip at the left of the card. Manual order is stored in catalog setting `chat_order` (action `chats-reorder`, `dashboard._reorder_chats/_patch_order/_merge_order`); rows expose `order` (-1 = never placed). Sort: pinned, then `order`, then newest; chats you never placed (including new ones) appear above placed ones. Working chats still render in the "Working" block at the bottom. `web/app.js` keeps the dropped order for 6 s so an in-flight poll cannot undo it (`orderOverride`).
+- 53 tests pass. Not committed.
+
+## 2026-11-05 Down arrow, project hues, handoff
+- The card's Snooze button was replaced by a down arrow (`data-action="to-bottom"`) that sends the chat to the bottom of the manual order (`commitOrder` in `web/app.js`; pinned chats show "Pinned chats stay at the top. Unpin it first."). Snooze backend and the Snoozed block remain.
+- Project hues: every project (key = normalized cwd) gets one saved hue in catalog setting `project_colors` (`dashboard.project_hues`; 24 hues; new projects take the unused hue farthest from those in use, most recent projects first). Rows expose `hue`; `.row.hued` styles tint card, border and label (`web/styles.css`); needs/working still blend red/green on top.
+- Wrote `notes/HANDOFF.md` and `notes/NEW_CHAT_PROMPT.md`; added the CURRENT STATE block above. 54 tests pass.
