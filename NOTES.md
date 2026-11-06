@@ -90,3 +90,6 @@ Verified native Chrome inbox visibly open, health version2 PID27104, 15 currentl
 - `/api/state` now returns `build` (newest mtime in `web/`); `web/app.js` reloads itself when it changes, so open windows pick up new versions after a restart. A window opened before this change needs one Ctrl+R.
 - Restart check: 209 chats, 171 read, 3 to-do, 2 pinned identical before and after.
 - Open ideas from earlier notes (not built): owner-only cloud/phone view of the last synced list (paused; blue work in `D:/agent manager` on main; hosting/access undecided, GitHub Pages familiar); cloud and remote sessions (old roadmap #6); Rust/Tauri desktop packaging; real Windows reboot test (tray, badge, pins, done state); verify claude:// and codex:// deep links end-to-end and the native badge/toast; verify Claude counts against the app sidebar; verified T3 deep link (none known); `chat-inbox-mod/` Claude Code pane status; merge `codex/simple-black` into `main` and push (6+ commits unpushed); the git stash "pre-simple-black local changes" still holds earlier uncommitted edits to `main`.
+
+## 2026-11-05 Layout tweak
+- T3 banner is about half as tall and blue (`.t3-section` in `web/styles.css`). "Recently done" moved below the chat list (`web/index.html`) and is larger (19px heading, 16px titles, 560px scroll area). Open windows reload themselves via the `build` id. Not committed.
