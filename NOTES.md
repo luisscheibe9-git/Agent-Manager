@@ -97,3 +97,8 @@ Verified native Chrome inbox visibly open, health version2 PID27104, 15 currentl
 ## 2026-11-05 Working chats last; public repo prep
 - Working chats (not pinned) now render in their own "Working · N" block at the bottom of the to-do list (`web/app.js`).
 - Prepared the repo for going public: removed a private Drive link from NOTES, made `chat-inbox-mod/hooks/register.tsx` portable (env `CHAT_INBOX_PYTHON`, `CHAT_INBOX_SCRIPT`, default `python` and `~/Desktop/Chat_Inbox/inbox.py`), rewrote commit author email to Luis's personal address.
+
+## 2026-11-05 Repo is PUBLIC
+- https://github.com/luisscheibe9-git/Agent-Manager went public on 2026-11-05 (history rewritten first: author/committer email is now luis.scheibe9@gmail.com; repo-local `git config user.email` set to it). Audited: no secrets in any commit; screenshots in `notes/screenshots/` are synthetic.
+- Rules from now on: never commit chat contents, real chat titles, tokens, cookies, `read_state.json`, `pins.json`, `chat_catalog.sqlite3`, `chrome_profile/`, or personal paths/links (all runtime data is gitignored). Old pre-rewrite commit hashes may stay fetchable on GitHub for a while.
+- Local-only: `AGENTS.md`/`CLAUDE.md` have uncommitted "Related projects" lines pointing at a private hub; do not commit them.
