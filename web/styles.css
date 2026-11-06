@@ -156,3 +156,41 @@ dialog::backdrop{background:#0009;backdrop-filter:blur(6px)}
 .mk{height:34px;padding:0 15px;border:0;border-radius:99px;font-size:13px;font-weight:650;color:#111}
 .mk.claude{background:#ff9f43}.mk.codex{background:var(--blue);color:#fff}
 .mk:hover{filter:brightness(1.1)}
+
+nav{align-items:center}
+.new{display:inline-flex;align-items:center;justify-content:center;line-height:1}
+
+.tri{width:30px;height:30px;padding:0;border-radius:99px;font-size:15px;line-height:1;color:var(--muted);background:transparent;border:1px solid transparent;transition:transform .2s var(--ease),color .15s,background .15s}
+.tri:hover{color:var(--fg);background:var(--surface2);border-color:var(--line)}
+.tri.open{transform:rotate(180deg)}
+.done-today{font-size:12.5px;font-weight:650;color:var(--green);letter-spacing:.01em}
+#toolbar-panel{margin-bottom:6px}
+.snooze-wrap{position:relative;display:inline-flex}
+.snooze-btn{height:42px;padding:0 14px;font-size:13px;color:var(--muted);background:transparent}
+.snooze-menu{position:absolute;right:0;top:46px;z-index:6;display:flex;flex-direction:column;gap:2px;min-width:130px;padding:6px;background:var(--surface2);border:1px solid var(--line2);border-radius:12px;box-shadow:0 14px 34px #000b}
+.snooze-menu button{border:0;background:transparent;text-align:left;padding:10px 12px;border-radius:8px;font-size:13.5px}
+.snooze-menu button:hover{background:var(--hover)}
+.snoozed{margin-top:22px}
+.wake-at{font-size:12px;color:var(--muted);flex:none}
+.idea.dragging{opacity:.4}
+.idea.drop-before{box-shadow:0 -2px 0 var(--blue)}
+.idea.drop-after{box-shadow:0 2px 0 var(--blue)}
+.idea-head{cursor:grab}
+
+.row-project{margin:18px 6px 6px}
+.grip{cursor:grab;flex:none;color:var(--muted);font-size:15px;letter-spacing:-3px;padding:4px 2px;user-select:none;opacity:.55;transition:opacity .15s}
+.row:hover .grip{opacity:1}
+.row.dragging{opacity:.4}
+.row.drop-before{box-shadow:0 -2px 0 var(--blue)}
+.row.drop-after{box-shadow:0 2px 0 var(--blue)}
+
+/* each project gets its own quiet hue (saved on the server) */
+.row.hued{--card:hsl(var(--hue) 26% 11%);border-color:hsl(var(--hue) 30% 19%)}
+.row.hued:hover{--card:hsl(var(--hue) 26% 14%);border-color:hsl(var(--hue) 34% 28%)}
+.row.hued.needs{--card:color-mix(in srgb,#ff453a 10%,hsl(var(--hue) 26% 11%));border-color:rgba(255,69,58,.34)}
+.row.hued.needs:hover{--card:color-mix(in srgb,#ff453a 13%,hsl(var(--hue) 26% 14%))}
+.row.hued.working{--card:color-mix(in srgb,#30d158 9%,hsl(var(--hue) 26% 11%));border-color:rgba(48,209,88,.3)}
+.row.hued.working:hover{--card:color-mix(in srgb,#30d158 12%,hsl(var(--hue) 26% 14%))}
+.row-project{color:hsl(var(--hue) 55% 68%)}
+.down-btn{height:42px;width:46px;padding:0;font-size:19px;line-height:1;color:var(--muted);background:transparent}
+.down-btn:hover{color:var(--fg)}

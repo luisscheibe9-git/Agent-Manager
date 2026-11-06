@@ -685,7 +685,7 @@ class H(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/api/"):
             name = self.path[5:]
-            if name not in ("read", "pin", "archive", "mark-all", "settings", "hook", "idea-add", "idea-update", "idea-delete", "idea-sent"):
+            if name not in ("read", "pin", "archive", "mark-all", "settings", "hook", "idea-add", "idea-update", "idea-delete", "idea-sent", "idea-reorder", "snooze", "unsnooze", "chats-reorder"):
                 self.reply(404, {"error": "Not found"})
                 return
             self.reply(200, dashboard.action(name, body))

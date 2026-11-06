@@ -48,7 +48,7 @@ def update_settings(values):
 
 def counts(rows):
     active = [r for r in rows if not r["archived"] and not r["managed_by_t3"] and not r["automated"]]
-    todo = [r for r in active if not r["read"]]
+    todo = [r for r in active if not r["read"] and r.get("snoozed_until", 0) <= time.time()]
     return {"total": len(active), "todo": len(todo),
             "t3": sum(r["managed_by_t3"] and not r["archived"] for r in rows),
             "needs": sum(r["state"] == "needs" for r in todo),
@@ -101,7 +101,7 @@ def _patch(sid, **fields):
     for row in data["chats"]:
         if row["id"] == sid:
             row.update(fields)
-    data["chats"].sort(key=lambda r: (not r["pinned"], -r["updated_at"]))
+    data["chats"].sort(key=lambda r: (not r["pinned"], r["order"], -r["updated_at"]))
     data["counts"] = counts(data["chats"])
 
 
@@ -156,6 +156,37 @@ def context_window(details):
     return 200_000
 
 
+HUES = list(range(0, 360, 15))
+
+
+def _gap(a, b):
+    return min(abs(a - b), 360 - abs(a - b))
+
+
+def project_hues(keys):
+    """One saved hue per project: same project, same color, kept across restarts.
+
+    New projects (given most recent first) get the unused hue farthest from the hues already in use, so the
+    projects you are working in look clearly different."""
+    with Catalog(inbox.CATALOG) as db:
+        saved = db.get("project_colors", {})
+        missing = [k for k in dict.fromkeys(keys) if k not in saved]
+        for key in missing:
+            counts_by_hue = {}
+            for hue in saved.values():
+                counts_by_hue[hue] = counts_by_hue.get(hue, 0) + 1
+            free = [h for h in HUES if h not in counts_by_hue]
+            if not free:
+                saved[key] = min(HUES, key=lambda h: counts_by_hue[h])
+            elif not counts_by_hue:
+                saved[key] = HUES[sum(map(ord, key)) % len(HUES)]
+            else:
+                saved[key] = max(free, key=lambda h: min(_gap(h, u) for u in counts_by_hue))
+        if missing:
+            db.set("project_colors", saved)
+    return saved
+
+
 def freeze_focus_reads():
     """One-time: keep chats that only counted as read because you focused them in the Claude app."""
     with Catalog(inbox.CATALOG) as db:
@@ -185,6 +216,10 @@ def snapshot():
         records = {r["item"][1]: r for r in db.records()}
         decisions = db.get("todo_decisions", {})
         ideas = db.get("ideas", [])
+        snoozes = db.get("snoozes", {})
+        order_list = db.get("chat_order", [])
+    positions = {sid: n for n, sid in enumerate(order_list)}
+    hues = project_hues([os.path.normcase((item[3] or "").rstrip("/\\")) or "__none__" for item in items])
     t3 = t3_sessions.scan(inbox.HOME)
     rows = []
     for source, sid, title, cwd, mt, last, role in items:
@@ -215,6 +250,9 @@ def snapshot():
                      "updated_at": mt, "activity": version, "last": last or "",
                      "state": state, "read": is_read, "pinned": sid in pins,
                      "done_at": decision.get("done_at", 0) if is_read else 0,
+                     "order": positions.get(sid, -1),
+                     "hue": hues.get(os.path.normcase(folder) or "__none__", 0),
+                     "snoozed_until": snoozes.get(sid, 0) if snoozes.get(sid, 0) > time.time() else 0,
                      "archived": sid in archived, "href": inbox.HREFS.get(sid, ""),
                      "branch": extra.get("branch", ""), "details": extra,
                      "attention": attention, "automated": bool(extra.get("automated")), "managed_by_t3": (source, sid) in t3["sessions"] or bool(T3_PATH.search(cwd or ""))})
@@ -231,7 +269,7 @@ def snapshot():
                       "five_hour_tokens": spent,
                       "five_hour_pct": min(100.0, round(100 * spent / limit, 1)),
                       "context_pct": min(100.0, round(100 * used / window, 1)) if used and window else None}
-    rows.sort(key=lambda r: (not r["pinned"], -r["updated_at"]))
+    rows.sort(key=lambda r: (not r["pinned"], r["order"], -r["updated_at"]))
     return {"chats": rows, "ideas": ideas, "counts": counts(rows),
             "t3": {"status": t3["status"], "reason": t3["reason"], "unresolved": t3.get("unresolved", [])},
             "settings": prefs, "limits": limits, "limit_basis": {k: v[1] for k, v in estimates.items()}, "updated_at": time.time(), "version": 2, "build": web_build(),
@@ -239,6 +277,8 @@ def snapshot():
 
 
 def action(name, body):
+    if name == "chats-reorder":
+        return _reorder_chats(body)
     if name.startswith("idea-"):
         return _idea_action(name, body)
     if name in ("settings", "hook"):
@@ -264,7 +304,7 @@ def _writer():
         _WAKE.set()
 
 
-IDEA_ACTIONS = ("idea-add", "idea-update", "idea-delete", "idea-sent")
+IDEA_ACTIONS = ("idea-add", "idea-update", "idea-delete", "idea-sent", "idea-reorder")
 
 
 def _clean_idea(body):
@@ -278,6 +318,19 @@ def _idea_action(name, body):
     """Ideas are to-do notes that are not chats yet; kept in the catalog and shown instantly from the cache."""
     if name not in IDEA_ACTIONS:
         raise ValueError("Unknown action")
+    if name == "idea-reorder":
+        ids = body.get("ids")
+        if not isinstance(ids, list) or len(ids) > 500:
+            raise ValueError("Expected a list of idea ids")
+        ids = [_clean_idea({"id": i}) for i in ids]
+        data = {"id": "", "ids": ids, "text": "", "target": "", "now": time.time()}
+        if not _STARTED:
+            with _ACTION_LOCK:
+                return _apply_idea(name, data)
+        _GEN[0] += 1
+        _patch_ideas(name, data)
+        _QUEUE.put(("idea", name, data, None, None))
+        return {"ok": True}
     ident = _clean_idea(body)
     text = str(body.get("text", ""))[:20000]
     job = ("idea", name, {"id": ident, "text": text, "target": str(body.get("target", ""))[:40], "now": time.time()})
@@ -299,6 +352,9 @@ def _edit_ideas(ideas, name, data):
         found["text"] = data["text"]
     elif name == "idea-delete":
         ideas = [i for i in ideas if i["id"] != data["id"]]
+    elif name == "idea-reorder":
+        order = {ident: n for n, ident in enumerate(data["ids"])}
+        ideas.sort(key=lambda i: order.get(i["id"], len(order)))
     elif name == "idea-sent" and found:
         found["sent"] = {"target": data["target"], "at": data["now"]}
     return ideas
@@ -313,6 +369,39 @@ def _patch_ideas(name, data):
 def _apply_idea(name, data):
     with Catalog(inbox.CATALOG) as db:
         db.set("ideas", _edit_ideas(db.get("ideas", []), name, data))
+    return {"ok": True}
+
+
+def _merge_order(old, ids):
+    chosen = set(ids)
+    return (ids + [i for i in old if i not in chosen])[:5000]
+
+
+def _patch_order(ids):
+    cache = _CACHE["data"]
+    if cache is None:
+        return
+    old = [r["id"] for r in sorted((r for r in cache["chats"] if r["order"] >= 0), key=lambda r: r["order"])]
+    positions = {sid: n for n, sid in enumerate(_merge_order(old, ids))}
+    for row in cache["chats"]:
+        row["order"] = positions.get(row["id"], -1)
+    cache["chats"].sort(key=lambda r: (not r["pinned"], r["order"], -r["updated_at"]))
+
+
+def _reorder_chats(body):
+    """Manual order of chats: the ids you dragged into place go first; chats you never placed stay on top by recency."""
+    ids = body.get("ids")
+    if not isinstance(ids, list) or len(ids) > 3000:
+        raise ValueError("Expected a list of chat ids")
+    ids = [str(i) for i in ids]
+    if not all(re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", i) for i in ids):
+        raise ValueError("Invalid chat id")
+    if not _STARTED:
+        with _ACTION_LOCK:
+            return _apply("chat-order", ids, None, None, None)
+    _GEN[0] += 1
+    _patch_order(ids)
+    _QUEUE.put(("chat-order", ids, None, None, None))
     return {"ok": True}
 
 
@@ -339,6 +428,12 @@ def _preview(name, body, rows, sid):
         if not isinstance(body.get("archived"), bool):
             raise ValueError("Expected archived true or false")
         _patch(sid, archived=body["archived"])
+    elif name == "snooze":
+        if body.get("hours") not in (1, 24):
+            raise ValueError("Snooze for 1 or 24 hours")
+        _patch(sid, snoozed_until=time.time() + body["hours"] * 3600)
+    elif name == "unsnooze":
+        _patch(sid, snoozed_until=0)
     else:
         raise ValueError("Unknown action")
 
@@ -365,6 +460,10 @@ def _action(name, body):
 def _apply(name, body, rows, by_id, sid):
     if name == "idea":  # queued as ("idea", action, data, None, None)
         return _apply_idea(body, rows)
+    if name == "chat-order":  # queued as ("chat-order", ids, None, None, None)
+        with Catalog(inbox.CATALOG) as db:
+            db.set("chat_order", _merge_order(db.get("chat_order", []), body))
+        return {"ok": True}
     now = time.time()
     if name == "mark-all":
         marks = inbox.load_state()
@@ -411,6 +510,16 @@ def _apply(name, body, rows, by_id, sid):
             archived = set(db.get("archived", []))
             (archived.add if body["archived"] else archived.discard)(sid)
             db.set("archived", sorted(archived))
+    elif name in ("snooze", "unsnooze"):
+        with Catalog(inbox.CATALOG) as db:
+            snoozes = {k: v for k, v in db.get("snoozes", {}).items() if v > now}
+            if name == "snooze":
+                if body.get("hours") not in (1, 24):
+                    raise ValueError("Snooze for 1 or 24 hours")
+                snoozes[sid] = now + body["hours"] * 3600
+            else:
+                snoozes.pop(sid, None)
+            db.set("snoozes", snoozes)
     else:
         raise ValueError("Unknown action")
     return {"ok": True}
@@ -469,7 +578,7 @@ def notify_due(notify, now=None):
         relevant = []
         for row in data["chats"]:
             sid = row["id"]
-            if row["archived"] or row["read"] or row["managed_by_t3"] or row["automated"] or row["state"] not in ("needs", "unread"):
+            if row["archived"] or row["read"] or row["managed_by_t3"] or row["automated"] or row["snoozed_until"] > now or row["state"] not in ("needs", "unread"):
                 db.db.execute("DELETE FROM reminders WHERE id=?", (sid,))
                 continue
             relevant.append(sid)

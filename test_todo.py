@@ -165,5 +165,52 @@ class TodoTests(unittest.TestCase):
         self.assertEqual(dashboard.snapshot()['ideas'], [])
 
 
+    def test_snooze_hides_until_it_expires_and_can_be_woken(self):
+        import time
+        self.fixture()
+        dashboard.action('read', {'id': SID, 'read': False})
+        self.assertEqual(dashboard.snapshot()['counts']['todo'], 1)
+        dashboard.action('snooze', {'id': SID, 'hours': 1})
+        row = dashboard.snapshot()['chats'][0]
+        self.assertGreater(row['snoozed_until'], time.time() + 3000)
+        self.assertEqual(dashboard.snapshot()['counts']['todo'], 0)
+        with self.assertRaises(ValueError):
+            dashboard.action('snooze', {'id': SID, 'hours': 5})
+        dashboard.action('unsnooze', {'id': SID})
+        self.assertEqual(dashboard.snapshot()['counts']['todo'], 1)
+        with Catalog(inbox.CATALOG) as db:
+            db.set('snoozes', {SID: time.time() - 5})  # expired snoozes come back on their own
+        self.assertEqual(dashboard.snapshot()['chats'][0]['snoozed_until'], 0)
+
+    def test_ideas_can_be_reordered(self):
+        self.fixture()
+        for ident in ('aaa', 'bbb', 'ccc'):
+            dashboard.action('idea-add', {'id': ident, 'text': ident})
+        self.assertEqual([i['id'] for i in dashboard.snapshot()['ideas']], ['ccc', 'bbb', 'aaa'])
+        dashboard.action('idea-reorder', {'ids': ['aaa', 'ccc', 'bbb']})
+        self.assertEqual([i['id'] for i in dashboard.snapshot()['ideas']], ['aaa', 'ccc', 'bbb'])
+        with self.assertRaises(ValueError):
+            dashboard.action('idea-reorder', {'ids': ['bad id!']})
+
+
+    def test_chats_can_be_reordered_by_hand(self):
+        self.fixture()
+        self.assertEqual(dashboard.snapshot()['chats'][0]['order'], -1)
+        dashboard.action('chats-reorder', {'ids': [SID]})
+        self.assertEqual(dashboard.snapshot()['chats'][0]['order'], 0)
+        with self.assertRaises(ValueError):
+            dashboard.action('chats-reorder', {'ids': ['bad id!']})
+        self.assertEqual(dashboard._merge_order(['a', 'b', 'c'], ['c', 'x']), ['c', 'x', 'a', 'b'])
+
+
+    def test_each_project_keeps_one_saved_hue(self):
+        first = dashboard.project_hues(['alpha', 'beta', '__none__'])
+        self.assertEqual(len(set(first.values())), 3)
+        self.assertGreaterEqual(min(dashboard._gap(x, y) for x in first.values() for y in first.values() if x != y), 60)
+        again = dashboard.project_hues(['alpha', 'gamma'])
+        self.assertEqual(again['alpha'], first['alpha'])  # saved, so it never changes
+        self.assertNotIn(again['gamma'], first.values())
+
+
 if __name__ == '__main__':
     unittest.main()
