@@ -6,7 +6,7 @@ const labels = {needs:'Needs your input',working:'Working',unread:'Unread',read:
 const number = value => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString() : '—';
 const when = timestamp => new Date(timestamp*1000).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
 // Always open on the complete to-do list, never an old search or recovery view.
-let build=0, state, query='', project='', showAll=false, rendered='', noticeTimer, refreshNumber=0;
+let ideasRendered='', ideaTimer=0, ideaBusy=0, build=0, state, query='', project='', showAll=false, rendered='', noticeTimer, refreshNumber=0;
 const expanded = new Set(), contexts = new Map(), loadingContexts = new Set();
 function notice(message) { clearTimeout(noticeTimer); $('notice').textContent=message; $('notice').hidden=false; noticeTimer=setTimeout(()=>$('notice').hidden=true,5000); }
 async function api(path,body) {
@@ -42,7 +42,9 @@ async function refresh() {
     if(data.build&&build&&data.build!==build) { location.reload(); return; }
     build=data.build||build;
     for(const [key,p] of pending) { if(Date.now()>p.until) { pending.delete(key); continue; } const row=data.chats.find(r=>r.id===p.id); if(row) Object.assign(row,p.fields); }
+    const localIdeas=(ideaBusy||ideaTimer)&&state?state.ideas:null;
     if(pending.size) { state=data; applyLocal(); } else state=data;
+    if(localIdeas) state.ideas=localIdeas;
     $('connection-error').hidden=true; $('connection').textContent='Saved locally · '+new Date(data.updated_at*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     render();
   } catch { if(request!==refreshNumber) return; $('connection-error').textContent='Connection lost. Your last loaded list is still here. Reconnecting…'; $('connection-error').hidden=false; $('connection').textContent='Offline · Last loaded list retained'; }
@@ -65,10 +67,20 @@ function contextHTML(context) {
   const changes=file=>file.added==='new'?'new file':file.added==='-'||file.removed==='-'?'binary file':`+${Number(file.added)||0} / −${Number(file.removed)||0}`;
   return `<p>Current branch: ${escapeHTML(context.branch||'detached HEAD')}</p>${link||'<p>No pull request found, or GitHub is unavailable.</p>'}${context.files.length?'<ul class="context-files">'+context.files.map(f=>`<li>${escapeHTML(f.path)} · ${changes(f)}</li>`).join('')+'</ul>':'<p>Working tree is clean.</p>'}`;
 }
+function compact(n) { return n>=1e6?(n/1e6).toFixed(n>=1e7?0:1)+'M':n>=1e3?Math.round(n/1e3)+'K':String(n); }
+function usageHTML(row) {
+  const u=row.usage||{}; if(!u.total_tokens) return '';
+  const pct=value=>value>0&&value<1?'<1%':Math.round(value)+'%';
+  const limit=state.limits&&state.limits[row.source], basis=state.limit_basis&&state.limit_basis[row.source];
+  const chips=[`<span class="chip tok" title="Total tokens used so far in this chat">${compact(u.total_tokens)} tok</span>`];
+  if(u.context_pct!=null) chips.push(`<span class="chip ctx" title="How full this chat's context window is">ctx ${pct(u.context_pct)}</span>`);
+  chips.push(`<span class="chip five" title="Estimated share of your 5-hour limit this chat used in the last 5 hours${limit?' (limit estimated at '+compact(limit)+' weighted tokens from '+basis+')':''}">5h ${pct(u.five_hour_pct)}</span>`);
+  return `<span class="chips">${chips.join('')}</span>`;
+}
 function rowHTML(row) {
   const id=escapeHTML(row.id), href=row.managed_by_t3?'':safeLink(row.href), details=row.details||{};
   const title=href ? `<a class="title" href="${escapeHTML(href)}" title="${escapeHTML(row.title)}" data-action="open">${escapeHTML(row.title)}</a>` : `<span class="title" title="${escapeHTML(row.title)}">${escapeHTML(row.title)}</span>`;
-  return `<article class="row ${row.source==='Claude'?'Claude':'Codex'} ${escapeHTML(row.state)} ${row.managed_by_t3?'t3':''}" data-id="${id}" tabindex="0" aria-label="${escapeHTML(row.title)}, ${escapeHTML(labels[row.state]||row.state)}"><div class="top">${title}<div class="actions"><button class="pin-btn" data-action="pin" aria-label="${row.pinned?'Unpin':'Pin'} ${escapeHTML(row.title)}" aria-pressed="${row.pinned}">${row.pinned?'◆ Pinned':'◇ Pin'}</button><button class="done-btn${row.read?' undo':''}" data-action="read" aria-label="${row.read?'Return to to-do':'Mark done'} ${escapeHTML(row.title)}">${row.read?'↶ To-do':'<span class="check">✓</span> Done'}</button></div></div><div class="meta"><span class="state ${escapeHTML(row.state)}">${escapeHTML(labels[row.state]||row.state)}</span><span>${escapeHTML(row.project)}</span>${row.branch?`<span>⑂ ${escapeHTML(row.branch)}</span>`:''}<time>${escapeHTML(when(row.updated_at))}</time></div><div class="snippet">${escapeHTML(row.last||'No final answer yet.')}</div><div class="row-links"><details data-expand="preview:${id}" ${expanded.has('preview:'+row.id)?'open':''}><summary>Preview</summary><pre class="answer">${escapeHTML(row.last||'No final answer yet.')}</pre></details><details data-expand="details:${id}" ${expanded.has('details:'+row.id)?'open':''}><summary>Details</summary><div class="details-body"><p>${escapeHTML(row.cwd||'No project folder')}</p>${row.state==='needs'?'<p>Answer the pending question in the original app. Done clears it from this list only.</p>':''}${row.state==='interrupted'?'<p>This turn was active before Windows last started. Open the chat to resume.</p>':''}${tokenHTML(details,row.source)}<h3>Project context</h3><button data-action="context" ${loadingContexts.has(row.id)?'disabled':''}>${loadingContexts.has(row.id)?'Loading…':contexts.has(row.id)?'Refresh branch, PR & changes':'Load branch, PR & changes'}</button>${contexts.has(row.id)?contextHTML(contexts.get(row.id)):''}</div></details></div></article>`;
+  return `<article class="row ${row.source==='Claude'?'Claude':'Codex'} ${escapeHTML(row.state)} ${row.managed_by_t3?'t3':''}" data-id="${id}" tabindex="0" aria-label="${escapeHTML(row.title)}, ${escapeHTML(labels[row.state]||row.state)}"><div class="top"><i class="dot" aria-hidden="true"></i>${title}${usageHTML(row)}<div class="actions"><button class="pin-btn" data-action="pin" aria-label="${row.pinned?'Unpin':'Pin'} ${escapeHTML(row.title)}" aria-pressed="${row.pinned}">${row.pinned?'◆ Pinned':'◇ Pin'}</button><button class="done-btn${row.read?' undo':''}" data-action="read" aria-label="${row.read?'Return to to-do':'Mark done'} ${escapeHTML(row.title)}">${row.read?'↶ To-do':'<span class="check">✓</span> Done'}</button></div></div><div class="snippet-wrap"><div class="snippet">${escapeHTML(row.last||'No final answer yet.')}</div><time class="stamp">${escapeHTML(when(row.updated_at))}</time></div></article>`;
 }
 const RECENT_DAYS=7, RECENT_MAX=15;
 function doneHTML(row) {
@@ -77,8 +89,55 @@ function doneHTML(row) {
   const title=attrs?`<a class="title" ${attrs} title="${escapeHTML(row.title)}">${escapeHTML(row.title)}</a>`:`<span class="title">${escapeHTML(row.title)}</span>`;
   return `<article class="row done-row ${row.source==='Claude'?'Claude':'Codex'}" data-id="${id}" tabindex="0"><div class="top">${title}<div class="actions"><button class="done-btn undo" data-action="read" aria-label="Return to to-do ${escapeHTML(row.title)}">↶ To-do</button></div></div><div class="meta"><span>${escapeHTML(row.project)}</span><time>Done ${escapeHTML(when(row.done_at))}</time></div></article>`;
 }
+const MAKE={'claude-chat':['Claude chat',text=>'claude://claude.ai/new?surface=chat&source=desktop_action&q='+encodeURIComponent(text)],'claude-code':['Claude Code',text=>'claude://code/new?q='+encodeURIComponent(text)],'codex':['Codex',text=>'codex://threads/new?prompt='+encodeURIComponent(text)]};
+function ideaApi(path,body) { ideaBusy++; return api(path,body).catch(error=>notice(error.message)).finally(()=>ideaBusy--); }
+function ideaHTML(idea) {
+  const sent=idea.sent?`Sent to ${escapeHTML((MAKE[idea.sent.target]||[idea.sent.target])[0])} · ${escapeHTML(when(idea.sent.at))}`:'Make this a chat:';
+  return `<article class="idea" data-idea="${escapeHTML(idea.id)}"><textarea rows="3" placeholder="Type an idea…" aria-label="Idea">${escapeHTML(idea.text)}</textarea><div class="idea-bar"><span class="idea-label">${sent}</span>${Object.entries(MAKE).map(([key,[label]])=>`<button type="button" class="mk ${key.startsWith('claude')?'claude':'codex'}" data-make="${key}">${label}</button>`).join('')}<button type="button" class="idea-del" data-idea-delete aria-label="Delete idea">✕</button></div></article>`;
+}
+function renderIdeas(force=false) {
+  const ideas=state.ideas||[], signature=JSON.stringify(ideas.map(i=>[i.id,i.sent]));
+  $('ideas').hidden=!ideas.length;
+  if(!force&&signature===ideasRendered) return;
+  ideasRendered=signature;
+  $('ideas').innerHTML=`<h2 class="group-heading">Ideas · ${ideas.length}</h2>`+ideas.map(ideaHTML).join('');
+  $('ideas').querySelectorAll('textarea').forEach(fit);
+}
+function fit(box) { box.style.height='auto'; box.style.height=Math.min(320,box.scrollHeight)+'px'; }
+function findIdea(node) { const id=node.closest('.idea')?.dataset.idea; return {id,idea:(state.ideas||[]).find(i=>i.id===id)}; }
+$('new-todo').onclick=()=>{
+  const idea={id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random().toString(36).slice(2)).replace(/-/g,'').slice(0,24),text:'',created_at:Date.now()/1000,sent:null};
+  state.ideas=[idea,...(state.ideas||[])]; renderIdeas(true);
+  ideaApi('idea-add',{id:idea.id,text:''});
+  const box=$('ideas').querySelector(`[data-idea="${idea.id}"] textarea`); box.focus(); box.scrollIntoView({block:'center',behavior:'smooth'});
+};
+$('ideas').addEventListener('input',event=>{
+  if(!event.target.matches('textarea')) return;
+  const {id,idea}=findIdea(event.target); if(!idea) return;
+  idea.text=event.target.value; fit(event.target);
+  clearTimeout(ideaTimer); ideaTimer=setTimeout(()=>{ideaTimer=0; ideaApi('idea-update',{id,text:idea.text});},500);
+});
+$('ideas').addEventListener('focusout',event=>{
+  if(!event.target.matches('textarea')) return;
+  const {id,idea}=findIdea(event.target); if(!idea) return;
+  clearTimeout(ideaTimer); ideaTimer=0;
+  if(!idea.text.trim()) { state.ideas=state.ideas.filter(i=>i.id!==id); ideaApi('idea-delete',{id}); setTimeout(()=>renderIdeas(true),0); }
+  else ideaApi('idea-update',{id,text:idea.text});
+});
+$('ideas').addEventListener('click',async event=>{
+  const {id,idea}=findIdea(event.target); if(!idea) return;
+  if(event.target.closest('[data-idea-delete]')) { state.ideas=state.ideas.filter(i=>i.id!==id); renderIdeas(true); ideaApi('idea-delete',{id}); return; }
+  const make=event.target.closest('[data-make]')?.dataset.make; if(!make) return;
+  const text=idea.text.trim(); if(!text) { notice('Type something first.'); return; }
+  try { await navigator.clipboard.writeText(text); } catch {}
+  const link=document.createElement('a'); link.href=MAKE[make][1](text); link.click();
+  idea.sent={target:make,at:Date.now()/1000}; renderIdeas(true);
+  ideaApi('idea-sent',{id,text,target:make});
+  notice(`Copied and opened ${MAKE[make][0]}. If it did not fill in, paste with Ctrl+V.`);
+});
 function render(force=false) {
   if(!state) return;
+  renderIdeas();
   const chats=state.chats.filter(row=>!row.archived);
   const projects=new Map(chats.map(row=>[row.project_key,row.project]));
   // Drop a stale project filter rather than leaving the saved inbox invisibly empty.
@@ -144,12 +203,12 @@ $('group').onchange=()=>mutate('settings',{group_by_project:$('group').checked})
 $('settings-open').onclick=()=>{
   if(!state) return;
   const prefs=state.settings;
-  $('reminders').checked=prefs.reminders_enabled; $('keep-taskbar').checked=prefs.keep_taskbar;
+  $('five-limit').value=prefs.five_hour_limit_tokens||0; $('reminders').checked=prefs.reminders_enabled; $('keep-taskbar').checked=prefs.keep_taskbar;
   for(const [id,value] of [['reminder-delay',prefs.reminder_delay_seconds],['settle-days',prefs.settle_days]]) { if(![...$(id).options].some(option=>option.value===String(value))) $(id).add(new Option(String(value),String(value))); $(id).value=String(value); }
   $('settings').showModal();
 };
 $('settings-close').onclick=()=>$('settings').close();
-$('settings-form').onsubmit=async event=>{event.preventDefault();const saved=await mutate('settings',{reminders_enabled:$('reminders').checked,reminder_delay_seconds:Number($('reminder-delay').value),keep_taskbar:$('keep-taskbar').checked,settle_days:Number($('settle-days').value)},'Preferences saved');if(saved)$('settings').close();};
+$('settings-form').onsubmit=async event=>{event.preventDefault();const saved=await mutate('settings',{reminders_enabled:$('reminders').checked,reminder_delay_seconds:Number($('reminder-delay').value),keep_taskbar:$('keep-taskbar').checked,settle_days:Number($('settle-days').value),five_hour_limit_tokens:Math.max(0,Math.round(Number($('five-limit').value)||0))},'Preferences saved');if(saved)$('settings').close();};
 $('notification-test').onclick=()=>mutate('test-notification',{},'Notification requested');
 document.addEventListener('keydown',event=>{if($('settings').open)return;if(event.key==='Escape'){query='';$('search').value='';storage.set('query','');$('search').blur();render();}else if(event.key==='/'&&!event.ctrlKey&&!event.metaKey&&!event.altKey&&!event.target.matches('input,select,textarea')){event.preventDefault();$('search').focus();}});
 refresh();

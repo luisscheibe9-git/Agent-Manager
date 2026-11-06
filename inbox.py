@@ -169,7 +169,7 @@ def scan_claude(cutoff, catalog=None):
         if mt < cutoff:
             continue
         cached = catalog.cached_file(p, stat) if catalog else None
-        if cached and cached.get("parser_version") != 5:
+        if cached and cached.get("parser_version") != 9:
             cached = None
         if cached is None:
             extra = telemetry.empty()
@@ -203,7 +203,7 @@ def scan_claude(cutoff, catalog=None):
                 continue  # empty/locked/partially written source: retain the saved entry
             cached = {"title": app_title(title, clean_title(first_user or "(untitled)")),
                       "last": (last or "")[:16000], "cwd": cwd, "role": role,
-                      "extra": telemetry.finish(extra), "parser_version": 5}
+                      "extra": telemetry.finish(extra), "parser_version": 9}
             if catalog:
                 catalog.cache_file(p, stat, cached)
         sid = os.path.basename(p)[:-6]
@@ -231,7 +231,7 @@ def scan_codex(cutoff, catalog=None, metadata=None):
         if mt < cutoff:
             continue
         cached = catalog.cached_file(p, stat) if catalog else None
-        if cached and cached.get("parser_version") != 5:
+        if cached and cached.get("parser_version") != 9:
             cached = None
         if cached is None:
             extra = telemetry.empty()
@@ -274,7 +274,7 @@ def scan_codex(cutoff, catalog=None, metadata=None):
             cached = {"id": sid, "title": clean_title(first_user or "(untitled)"),
                       "last": (last or "")[:16000], "cwd": cwd, "role": role,
                       "running": extra["running"], "sidechain": sidechain,
-                      "extra": telemetry.finish(extra), "parser_version": 5}
+                      "extra": telemetry.finish(extra), "parser_version": 9}
             if catalog:
                 catalog.cache_file(p, stat, cached)
         sid = cached["id"]
@@ -685,7 +685,7 @@ class H(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/api/"):
             name = self.path[5:]
-            if name not in ("read", "pin", "archive", "mark-all", "settings", "hook"):
+            if name not in ("read", "pin", "archive", "mark-all", "settings", "hook", "idea-add", "idea-update", "idea-delete", "idea-sent"):
                 self.reply(404, {"error": "Not found"})
                 return
             self.reply(200, dashboard.action(name, body))

@@ -1,13 +1,55 @@
 """Provider transcript details. Never execute commands found in transcripts."""
 import json
 import re
+import time
+from datetime import datetime
 
 
 def empty():
     return {"branch": "", "pull_requests": [], "changed_files": [], "tokens": {},
             "model": "", "context_window": None, "context_tokens": None,
             "running": None, "needs": False, "rate_limits": None, "pending": {},
-            "active_turn": None, "usage_messages": {}, "attention_sequence": 0}
+            "active_turn": None, "usage_messages": {}, "attention_sequence": 0,
+            "usage_buckets": {}, "limit_hits": []}
+
+
+LIMIT_HIT = re.compile(r"hit your (?:session|usage|5-hour) limit\s*[·\-]\s*resets (\d{1,2})(?::(\d{2}))?\s*([ap]m)", re.I)
+
+
+def note_limit_hit(details, record, text):
+    """Remember 'You've hit your session limit · resets 2am' so spend before it can calibrate the 5-hour limit."""
+    match = LIMIT_HIT.search(text or "")
+    if not match:
+        return
+    try:
+        hit = datetime.fromisoformat(str(record.get("timestamp")).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return
+    hour, minute = int(match.group(1)) % 12, int(match.group(2) or 0)
+    if match.group(3).lower() == "pm":
+        hour += 12
+    local = time.localtime(hit)
+    reset = time.mktime((local.tm_year, local.tm_mon, local.tm_mday, hour, minute, 0, 0, 0, -1))
+    if reset <= hit:
+        reset += 86400
+    if all(abs(known["reset"] - reset) > 600 for known in details["limit_hits"]):
+        details["limit_hits"].append({"at": hit, "reset": reset})
+
+
+def claude_weight(usage):
+    """Cost-weighted token units (output costs more than input; cache reads are cheap): a closer proxy for plan limits."""
+    return (usage.get("input_tokens", 0) + 5 * usage.get("output_tokens", 0)
+            + 1.25 * usage.get("cache_creation_input_tokens", 0) + 0.1 * usage.get("cache_read_input_tokens", 0))
+
+
+def add_usage(details, stamp, tokens):
+    """Count tokens that spend plan limits (not cache reads) in 5-minute buckets for the 5-hour share."""
+    try:
+        when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return
+    key = str(int(when // 300 * 300))
+    details["usage_buckets"][key] = details["usage_buckets"].get(key, 0) + tokens
 
 
 def text_details(text, details):
@@ -46,6 +88,12 @@ def codex(record, details):
         elif event == "token_count":
             info = payload.get("info") or {}
             details["tokens"] = info.get("total_token_usage") or details["tokens"]
+            total = info.get("total_token_usage") or {}
+            cached = total.get("cached_input_tokens", 0) or 0
+            spent = ((total.get("input_tokens", 0) or 0) - cached) + 0.1 * cached + 8 * (total.get("output_tokens", 0) or 0)
+            if spent > details.get("_spent", 0):
+                add_usage(details, record.get("timestamp"), spent - details.get("_spent", 0))
+                details["_spent"] = spent
             details["context_tokens"] = (info.get("last_token_usage") or {}).get("total_tokens")
             details["context_window"] = info.get("model_context_window") or details["context_window"]
             details["rate_limits"] = payload.get("rate_limits") or details["rate_limits"]
@@ -97,6 +145,7 @@ def claude(record, details):
             if not isinstance(block, dict):
                 continue
             text_details(block.get("text", ""), details)
+            note_limit_hit(details, record, block.get("text", ""))
             if block.get("type") == "tool_use":
                 details["running"] = True
                 details["needs"] = block.get("name") in ("AskUserQuestion", "ExitPlanMode")
@@ -106,8 +155,12 @@ def claude(record, details):
         usage = message.get("usage") or {}
         if usage and message.get("id"):
             previous = details["usage_messages"].setdefault(message["id"], {})
+            spent_before = claude_weight(previous)
             for key in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
                 previous[key] = max(previous.get(key, 0), usage.get(key, 0) or 0)
+            spent_after = claude_weight(previous)
+            if spent_after > spent_before:
+                add_usage(details, record.get("timestamp"), spent_after - spent_before)
             totals = {key: sum(m.get(key, 0) for m in details["usage_messages"].values())
                       for key in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")}
             totals["cached_input_tokens"] = totals["cache_read_input_tokens"]
@@ -123,6 +176,10 @@ def finish(details):
     details.pop("usage_messages", None)
     details.pop("pending", None)
     details.pop("active_turn", None)
+    details.pop("_spent", None)
+    details["limit_hits"] = details["limit_hits"][-20:]
+    cutoff = time.time() - 60 * 86400
+    details["usage_buckets"] = {k: v for k, v in details["usage_buckets"].items() if int(k) >= cutoff}
     details["changed_files"] = details["changed_files"][-100:]
     details["pull_requests"] = details["pull_requests"][-20:]
     return details

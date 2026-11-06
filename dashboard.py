@@ -15,7 +15,8 @@ from catalog import Catalog
 
 T3_PATH = re.compile(r"[\\/]\.t3[\\/]")  # chats started inside T3 Code (scratch/worktree folders)
 DEFAULTS = {"reminders_enabled": True, "reminder_delay_seconds": 180,
-            "keep_taskbar": True, "settle_days": 7, "group_by_project": True}
+            "keep_taskbar": True, "settle_days": 7, "group_by_project": True,
+            "five_hour_limit_tokens": 0}
 
 
 def settings():
@@ -35,6 +36,8 @@ def update_settings(values):
             raise ValueError("Expected a whole number")
         if key == "reminder_delay_seconds" and not 60 <= value <= 86400:
             raise ValueError("Reminder delay must be between 1 minute and 1 day")
+        if key == "five_hour_limit_tokens" and not 0 <= value <= 10**10:
+            raise ValueError("Five-hour limit must be 0 (automatic) or a token count")
         if key == "settle_days" and not 1 <= value <= 365:
             raise ValueError("Settled age must be between 1 and 365 days")
         current[key] = value
@@ -113,6 +116,46 @@ def web_build():
         return 0
 
 
+def five_hour_limit(rows, override=0):
+    """Estimated 5-hour budget as (units, basis).
+
+    Claude: spend in the 5-hour window before each "You've hit your session limit" message is the limit itself;
+    the median over recent hits is used. Otherwise the busiest 5 hours seen in the last 14 days. Units are
+    cost-weighted tokens (see telemetry.claude_weight)."""
+    if override:
+        return override, "your setting"
+    merged, hits = {}, {}
+    for r in rows:
+        for key, tokens in (r["details"].get("usage_buckets") or {}).items():
+            merged[int(key)] = merged.get(int(key), 0) + tokens
+        for hit in r["details"].get("limit_hits") or []:
+            hits[round(hit["reset"] / 600)] = hit
+    spends = sorted(sum(v for k, v in merged.items() if hit["reset"] - 5 * 3600 <= k <= hit["at"])
+                    for hit in hits.values())
+    spends = [x for x in spends if x > 0]
+    if spends:
+        return max(spends[len(spends) // 2], 1_000_000), f"{len(spends)} times you hit the limit"
+    best = total = left = 0
+    times = sorted(merged)
+    for right, stamp in enumerate(times):
+        total += merged[stamp]
+        while times[left] <= stamp - 5 * 3600:
+            total -= merged[times[left]]
+            left += 1
+        best = max(best, total)
+    return max(best, 1_000_000), "your busiest 5 hours"
+
+
+def context_window(details):
+    """Context size in tokens: reported by Codex; estimated for Claude (200K, or 1M once a chat exceeds it)."""
+    if details.get("context_window"):
+        return details["context_window"]
+    used = details.get("context_tokens") or 0
+    if "1m" in (details.get("model") or "").lower() or used > 200_000:
+        return 1_000_000
+    return 200_000
+
+
 def freeze_focus_reads():
     """One-time: keep chats that only counted as read because you focused them in the Claude app."""
     with Catalog(inbox.CATALOG) as db:
@@ -141,6 +184,7 @@ def snapshot():
         archived = set(db.get("archived", []))
         records = {r["item"][1]: r for r in db.records()}
         decisions = db.get("todo_decisions", {})
+        ideas = db.get("ideas", [])
     t3 = t3_sessions.scan(inbox.HOME)
     rows = []
     for source, sid, title, cwd, mt, last, role in items:
@@ -174,14 +218,29 @@ def snapshot():
                      "archived": sid in archived, "href": inbox.HREFS.get(sid, ""),
                      "branch": extra.get("branch", ""), "details": extra,
                      "attention": attention, "automated": bool(extra.get("automated")), "managed_by_t3": (source, sid) in t3["sessions"] or bool(T3_PATH.search(cwd or ""))})
+    now = time.time()
+    estimates = {source: five_hour_limit([r for r in rows if r["source"] == source], prefs["five_hour_limit_tokens"])
+                 for source in ("Claude", "Codex")}
+    limits = {source: value[0] for source, value in estimates.items()}
+    for r in rows:
+        d = r["details"]
+        spent = sum(v for k, v in (d.get("usage_buckets") or {}).items() if int(k) >= now - 5 * 3600)
+        limit = limits.get(r["source"]) or 1
+        window, used = context_window(d), d.get("context_tokens")
+        r["usage"] = {"total_tokens": (d.get("tokens") or {}).get("total_tokens"),
+                      "five_hour_tokens": spent,
+                      "five_hour_pct": min(100.0, round(100 * spent / limit, 1)),
+                      "context_pct": min(100.0, round(100 * used / window, 1)) if used and window else None}
     rows.sort(key=lambda r: (not r["pinned"], -r["updated_at"]))
-    return {"chats": rows, "counts": counts(rows),
+    return {"chats": rows, "ideas": ideas, "counts": counts(rows),
             "t3": {"status": t3["status"], "reason": t3["reason"], "unresolved": t3.get("unresolved", [])},
-            "settings": prefs, "updated_at": time.time(), "version": 2, "build": web_build(),
+            "settings": prefs, "limits": limits, "limit_basis": {k: v[1] for k, v in estimates.items()}, "updated_at": time.time(), "version": 2, "build": web_build(),
             "title": os.environ.get("AGENT_MANAGER_LABEL", "Agent Manager")}
 
 
 def action(name, body):
+    if name.startswith("idea-"):
+        return _idea_action(name, body)
     if name in ("settings", "hook"):
         with inbox.DATA_LOCK:
             return update_settings(body) if name == "settings" else hook(body)
@@ -203,6 +262,58 @@ def _writer():
             _QUEUE.task_done()
         _GEN[0] += 1
         _WAKE.set()
+
+
+IDEA_ACTIONS = ("idea-add", "idea-update", "idea-delete", "idea-sent")
+
+
+def _clean_idea(body):
+    ident = str(body.get("id", ""))
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", ident):
+        raise ValueError("Invalid idea id")
+    return ident
+
+
+def _idea_action(name, body):
+    """Ideas are to-do notes that are not chats yet; kept in the catalog and shown instantly from the cache."""
+    if name not in IDEA_ACTIONS:
+        raise ValueError("Unknown action")
+    ident = _clean_idea(body)
+    text = str(body.get("text", ""))[:20000]
+    job = ("idea", name, {"id": ident, "text": text, "target": str(body.get("target", ""))[:40], "now": time.time()})
+    if not _STARTED:
+        with _ACTION_LOCK:
+            return _apply_idea(job[1], job[2])
+    _GEN[0] += 1
+    _patch_ideas(job[1], job[2])
+    _QUEUE.put((job[0], job[1], job[2], None, None))
+    return {"ok": True}
+
+
+def _edit_ideas(ideas, name, data):
+    ideas = list(ideas)
+    found = next((i for i in ideas if i["id"] == data["id"]), None)
+    if name == "idea-add" and not found:
+        ideas.insert(0, {"id": data["id"], "text": data["text"], "created_at": data["now"], "sent": None})
+    elif name == "idea-update" and found:
+        found["text"] = data["text"]
+    elif name == "idea-delete":
+        ideas = [i for i in ideas if i["id"] != data["id"]]
+    elif name == "idea-sent" and found:
+        found["sent"] = {"target": data["target"], "at": data["now"]}
+    return ideas
+
+
+def _patch_ideas(name, data):
+    cache = _CACHE["data"]
+    if cache is not None:
+        cache["ideas"] = _edit_ideas(cache.get("ideas", []), name, data)
+
+
+def _apply_idea(name, data):
+    with Catalog(inbox.CATALOG) as db:
+        db.set("ideas", _edit_ideas(db.get("ideas", []), name, data))
+    return {"ok": True}
 
 
 def flush():
@@ -252,6 +363,8 @@ def _action(name, body):
 
 
 def _apply(name, body, rows, by_id, sid):
+    if name == "idea":  # queued as ("idea", action, data, None, None)
+        return _apply_idea(body, rows)
     now = time.time()
     if name == "mark-all":
         marks = inbox.load_state()
