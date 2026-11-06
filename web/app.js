@@ -90,50 +90,73 @@ function doneHTML(row) {
   return `<article class="row done-row ${row.source==='Claude'?'Claude':'Codex'}" data-id="${id}" tabindex="0"><div class="top">${title}<div class="actions"><button class="done-btn undo" data-action="read" aria-label="Return to to-do ${escapeHTML(row.title)}">↶ To-do</button></div></div><div class="meta"><span>${escapeHTML(row.project)}</span><time>Done ${escapeHTML(when(row.done_at))}</time></div></article>`;
 }
 const MAKE={'claude-chat':['Claude chat',text=>'claude://claude.ai/new?surface=chat&source=desktop_action&q='+encodeURIComponent(text)],'claude-code':['Claude Code',text=>'claude://code/new?q='+encodeURIComponent(text)],'codex':['Codex',text=>'codex://threads/new?prompt='+encodeURIComponent(text)]};
+const ideaOpen=new Set(); let composing=false;
 function ideaApi(path,body) { ideaBusy++; return api(path,body).catch(error=>notice(error.message)).finally(()=>ideaBusy--); }
+function ideaTitle(idea) { return (idea.text||'').trim().split('\n')[0] || 'Empty idea'; }
+function composerHTML() {
+  return `<article class="idea-composer"><textarea rows="2" placeholder="Type an idea, then press Enter…" aria-label="New idea"></textarea><div class="composer-bar"><span class="idea-label">Enter to add · Shift+Enter for a new line</span><button type="button" class="idea-cancel" data-composer-cancel aria-label="Cancel">✕</button><button type="button" class="idea-ok" data-composer-ok aria-label="Add idea">✓</button></div></article>`;
+}
 function ideaHTML(idea) {
-  const sent=idea.sent?`Sent to ${escapeHTML((MAKE[idea.sent.target]||[idea.sent.target])[0])} · ${escapeHTML(when(idea.sent.at))}`:'Make this a chat:';
-  return `<article class="idea" data-idea="${escapeHTML(idea.id)}"><textarea rows="3" placeholder="Type an idea…" aria-label="Idea">${escapeHTML(idea.text)}</textarea><div class="idea-bar"><span class="idea-label">${sent}</span>${Object.entries(MAKE).map(([key,[label]])=>`<button type="button" class="mk ${key.startsWith('claude')?'claude':'codex'}" data-make="${key}">${label}</button>`).join('')}<button type="button" class="idea-del" data-idea-delete aria-label="Delete idea">✕</button></div></article>`;
+  const open=ideaOpen.has(idea.id);
+  const sent=idea.sent?`<span class="idea-sent">Sent to ${escapeHTML((MAKE[idea.sent.target]||[idea.sent.target])[0])}</span>`:'';
+  const body=open?`<div class="idea-body"><textarea rows="3" placeholder="Type an idea…" aria-label="Idea">${escapeHTML(idea.text)}</textarea><div class="idea-bar"><span class="idea-label">Make this a chat:</span>${Object.entries(MAKE).map(([key,[label]])=>`<button type="button" class="mk ${key.startsWith('claude')?'claude':'codex'}" data-make="${key}">${label}</button>`).join('')}<button type="button" class="idea-del" data-idea-delete aria-label="Delete idea">✕</button></div></div>`:'';
+  return `<article class="idea${open?' open':''}" data-idea="${escapeHTML(idea.id)}"><div class="idea-head" role="button" tabindex="0" aria-expanded="${open}"><i class="dot idea-dot" aria-hidden="true"></i><span class="idea-title">${escapeHTML(ideaTitle(idea))}</span><span class="chip idea-chip">Idea</span>${sent}<time>${escapeHTML(when(idea.created_at))}</time></div>${body}</article>`;
 }
 function renderIdeas(force=false) {
-  const ideas=state.ideas||[], signature=JSON.stringify(ideas.map(i=>[i.id,i.sent]));
-  $('ideas').hidden=!ideas.length;
+  const ideas=state.ideas||[], signature=JSON.stringify([composing,[...ideaOpen],ideas.map(i=>[i.id,i.sent])]);
+  $('ideas').hidden=!ideas.length&&!composing;
   if(!force&&signature===ideasRendered) return;
   ideasRendered=signature;
-  $('ideas').innerHTML=`<h2 class="group-heading">Ideas · ${ideas.length}</h2>`+ideas.map(ideaHTML).join('');
-  $('ideas').querySelectorAll('textarea').forEach(fit);
+  $('ideas').innerHTML=`<h2 class="group-heading">Ideas · ${ideas.length}</h2>`+(composing?composerHTML():'')+ideas.map(ideaHTML).join('');
+  $('ideas').querySelectorAll('.idea textarea').forEach(fit);
 }
 function fit(box) { box.style.height='auto'; box.style.height=Math.min(320,box.scrollHeight)+'px'; }
 function findIdea(node) { const id=node.closest('.idea')?.dataset.idea; return {id,idea:(state.ideas||[]).find(i=>i.id===id)}; }
-$('new-todo').onclick=()=>{
-  const idea={id:(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random().toString(36).slice(2)).replace(/-/g,'').slice(0,24),text:'',created_at:Date.now()/1000,sent:null};
-  state.ideas=[idea,...(state.ideas||[])]; renderIdeas(true);
-  ideaApi('idea-add',{id:idea.id,text:''});
-  const box=$('ideas').querySelector(`[data-idea="${idea.id}"] textarea`); box.focus(); box.scrollIntoView({block:'center',behavior:'smooth'});
-};
+function newId() { return (crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random().toString(36).slice(2)).replace(/-/g,'').slice(0,24); }
+function openComposer() { composing=true; renderIdeas(true); const box=$('ideas').querySelector('.idea-composer textarea'); box.focus(); box.scrollIntoView({block:'center',behavior:'smooth'}); }
+function commitComposer() {
+  const box=$('ideas').querySelector('.idea-composer textarea'); if(!box) return;
+  const text=box.value.trim(); composing=false;
+  if(text) { const idea={id:newId(),text,created_at:Date.now()/1000,sent:null}; state.ideas=[idea,...(state.ideas||[])]; ideaApi('idea-add',{id:idea.id,text}); }
+  renderIdeas(true);
+}
+$('new-todo').onclick=()=>{ if(composing) $('ideas').querySelector('.idea-composer textarea')?.focus(); else openComposer(); };
+$('ideas').addEventListener('keydown',event=>{
+  if(event.target.matches('.idea-composer textarea')) {
+    if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing) { event.preventDefault(); commitComposer(); }
+    else if(event.key==='Escape') { composing=false; renderIdeas(true); }
+  } else if(event.target.matches('.idea-head')&&(event.key==='Enter'||event.key===' ')) { event.preventDefault(); event.target.click(); }
+});
 $('ideas').addEventListener('input',event=>{
-  if(!event.target.matches('textarea')) return;
+  if(!event.target.matches('.idea textarea')) return;
   const {id,idea}=findIdea(event.target); if(!idea) return;
   idea.text=event.target.value; fit(event.target);
+  const title=event.target.closest('.idea').querySelector('.idea-title'); if(title) title.textContent=ideaTitle(idea);
   clearTimeout(ideaTimer); ideaTimer=setTimeout(()=>{ideaTimer=0; ideaApi('idea-update',{id,text:idea.text});},500);
 });
 $('ideas').addEventListener('focusout',event=>{
-  if(!event.target.matches('textarea')) return;
+  if(!event.target.matches('.idea textarea')) return;
   const {id,idea}=findIdea(event.target); if(!idea) return;
   clearTimeout(ideaTimer); ideaTimer=0;
-  if(!idea.text.trim()) { state.ideas=state.ideas.filter(i=>i.id!==id); ideaApi('idea-delete',{id}); setTimeout(()=>renderIdeas(true),0); }
+  if(!idea.text.trim()) { state.ideas=state.ideas.filter(i=>i.id!==id); ideaOpen.delete(id); ideaApi('idea-delete',{id}); setTimeout(()=>renderIdeas(true),0); }
   else ideaApi('idea-update',{id,text:idea.text});
 });
 $('ideas').addEventListener('click',async event=>{
+  if(event.target.closest('[data-composer-ok]')) { commitComposer(); return; }
+  if(event.target.closest('[data-composer-cancel]')) { composing=false; renderIdeas(true); return; }
   const {id,idea}=findIdea(event.target); if(!idea) return;
-  if(event.target.closest('[data-idea-delete]')) { state.ideas=state.ideas.filter(i=>i.id!==id); renderIdeas(true); ideaApi('idea-delete',{id}); return; }
-  const make=event.target.closest('[data-make]')?.dataset.make; if(!make) return;
-  const text=idea.text.trim(); if(!text) { notice('Type something first.'); return; }
-  try { await navigator.clipboard.writeText(text); } catch {}
-  const link=document.createElement('a'); link.href=MAKE[make][1](text); link.click();
-  idea.sent={target:make,at:Date.now()/1000}; renderIdeas(true);
-  ideaApi('idea-sent',{id,text,target:make});
-  notice(`Copied and opened ${MAKE[make][0]}. If it did not fill in, paste with Ctrl+V.`);
+  if(event.target.closest('[data-idea-delete]')) { state.ideas=state.ideas.filter(i=>i.id!==id); ideaOpen.delete(id); renderIdeas(true); ideaApi('idea-delete',{id}); return; }
+  const make=event.target.closest('[data-make]')?.dataset.make;
+  if(make) {
+    const text=idea.text.trim(); if(!text) { notice('Type something first.'); return; }
+    try { await navigator.clipboard.writeText(text); } catch {}
+    const link=document.createElement('a'); link.href=MAKE[make][1](text); link.click();
+    idea.sent={target:make,at:Date.now()/1000}; renderIdeas(true);
+    ideaApi('idea-sent',{id,text,target:make});
+    notice(`Copied and opened ${MAKE[make][0]}. If it did not fill in, paste with Ctrl+V.`);
+    return;
+  }
+  if(event.target.closest('.idea-head')) { if(ideaOpen.has(id)) ideaOpen.delete(id); else ideaOpen.add(id); renderIdeas(true); if(ideaOpen.has(id)) $('ideas').querySelector(`[data-idea="${id}"] textarea`)?.focus(); }
 });
 function render(force=false) {
   if(!state) return;
