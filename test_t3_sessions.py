@@ -130,6 +130,22 @@ class T3Tests(unittest.TestCase):
         path.rename(path.with_name('state.sqlite'))
         self.assertIn(('Codex','native-1'),t3_sessions.scan(self.home)['sessions'])
 
+    def test_unresolved_matches_t3_unsettled_threads(self):
+        path, db = make_db(self.home)
+        db.execute('ALTER TABLE orchestration_v2_projection_threads ADD COLUMN payload_json TEXT')
+        def thread(tid, **fields):
+            payload = {'title': tid, 'updatedAt': '2026-11-05T10:00:00.000Z', **fields}
+            db.execute('INSERT INTO orchestration_v2_projection_threads VALUES (?,?,?,?)', (tid, fields.get('deletedAt'), fields.get('archivedAt'), json.dumps(payload)))
+        thread('open')
+        thread('settled', settledOverride='settled', settledAt='2026-11-05T11:00:00.000Z')
+        thread('resettled-later', settledAt='2026-11-05T11:00:00.000Z', unsettledAt='2026-11-05T12:00:00.000Z')
+        thread('archived', archivedAt='2026-11-05T11:00:00.000Z')
+        thread('deleted', deletedAt='2026-11-05T11:00:00.000Z')
+        thread('snoozed', snoozedUntil='2999-01-01T00:00:00.000Z')
+        db.commit(); db.close()
+        ids = [t['id'] for t in t3_sessions.scan(self.home)['unresolved']]
+        self.assertEqual(sorted(ids), ['open', 'resettled-later'])
+
 
 if __name__ == '__main__':
     unittest.main()

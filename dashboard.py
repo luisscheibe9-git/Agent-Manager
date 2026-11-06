@@ -102,6 +102,19 @@ def _patch(sid, **fields):
     data["counts"] = counts(data["chats"])
 
 
+def freeze_focus_reads():
+    """One-time: keep chats that only counted as read because you focused them in the Claude app."""
+    with Catalog(inbox.CATALOG) as db:
+        if db.get("focus_reads_frozen"):
+            return
+        stored = inbox.load_state()
+        changed = {sid: t for sid, t in inbox.merged_state().items() if t > stored.get(sid, 0)}
+        if changed:
+            stored.update(changed)
+            inbox.save_state(stored)
+        db.set("focus_reads_frozen", True)
+
+
 @inbox.locked
 def snapshot():
     drain_hooks()
@@ -110,7 +123,8 @@ def snapshot():
     items = inbox.collect_sessions()
     if inbox.read_json(inbox.STATE, None) is None:
         inbox.save_state({r[1]: max(r[4], inbox.HOOKS.get(r[1], {}).get("timestamp", 0)) for r in items})
-    read = inbox.merged_state()
+    freeze_focus_reads()
+    read = inbox.load_state()  # only Done resolves a chat; opening or focusing it does not
     pins = inbox.load_pins()
     with Catalog(inbox.CATALOG) as db:
         archived = set(db.get("archived", []))
@@ -151,7 +165,7 @@ def snapshot():
                      "attention": attention, "automated": bool(extra.get("automated")), "managed_by_t3": (source, sid) in t3["sessions"] or bool(T3_PATH.search(cwd or ""))})
     rows.sort(key=lambda r: (not r["pinned"], -r["updated_at"]))
     return {"chats": rows, "counts": counts(rows),
-            "t3": {"status": t3["status"], "reason": t3["reason"]},
+            "t3": {"status": t3["status"], "reason": t3["reason"], "unresolved": t3.get("unresolved", [])},
             "settings": prefs, "updated_at": time.time(), "version": 2,
             "title": os.environ.get("AGENT_MANAGER_LABEL", "Agent Manager")}
 

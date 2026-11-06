@@ -25,6 +25,31 @@ def object_json(value):
         return {}
 
 
+def unresolved_threads(db, tables):
+    """Threads T3 Code itself shows as unsettled: live, not archived, not settled, not snoozed."""
+    if 'orchestration_v2_projection_threads' not in tables:
+        return []
+    now = time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())
+    found = []
+    try:
+        for thread_id, raw in db.execute('SELECT thread_id,payload_json FROM orchestration_v2_projection_threads'):
+            p = object_json(raw)
+            if p.get('deletedAt') or p.get('archivedAt'):
+                continue
+            override, settled, unsettled = p.get('settledOverride'), p.get('settledAt'), p.get('unsettledAt')
+            if override == 'settled':
+                continue
+            if override != 'unsettled' and settled and not (unsettled and unsettled > settled):
+                continue
+            if (p.get('snoozedUntil') or '') > now:
+                continue
+            found.append({"id": thread_id, "title": str(p.get('title') or '(untitled)')[:120],
+                          "updated_at": str(p.get('updatedAt') or '')})
+    except sqlite3.Error:
+        return []
+    return sorted(found, key=lambda t: t["updated_at"], reverse=True)
+
+
 def scan(home):
     override = os.environ.get('AGENT_MANAGER_T3_DB')
     root = Path(home) / '.t3/userdata'
@@ -74,7 +99,7 @@ def scan(home):
                     for item in imports if isinstance(imports, list) else []:
                         if isinstance(item, dict):
                             add(item.get('provider'), item.get('providerSessionId'), owner)
-            return {"status": "ready", "sessions": sessions, "reason": ""}
+            return {"status": "ready", "sessions": sessions, "reason": "", "unresolved": unresolved_threads(db, tables)}
     except (sqlite3.Error, OSError, ValueError):
         # Fail open: never hide unrelated chats because T3 is locked or changed.
         return {**result, "status": "unavailable", "reason": "read_failed"}

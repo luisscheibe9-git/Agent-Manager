@@ -66,14 +66,14 @@ function contextHTML(context) {
 function rowHTML(row) {
   const id=escapeHTML(row.id), href=row.managed_by_t3?'':safeLink(row.href), details=row.details||{};
   const title=href ? `<a class="title" href="${escapeHTML(href)}" title="${escapeHTML(row.title)}" data-action="open">${escapeHTML(row.title)}</a>` : (row.source==='Claude'&&!row.managed_by_t3 ? `<a class="title" href="#" title="No app link for this chat. Click to resume it in a terminal." data-action="resume">${escapeHTML(row.title)}</a>` : `<span class="title" title="${escapeHTML(row.title)}">${escapeHTML(row.title)}</span>`);
-  return `<article class="row ${row.source==='Claude'?'Claude':'Codex'} ${escapeHTML(row.state)} ${row.managed_by_t3?'t3':''}" data-id="${id}" tabindex="0" aria-label="${escapeHTML(row.title)}, ${escapeHTML(labels[row.state]||row.state)}"><div class="top">${title}<div class="actions"><button data-action="pin" aria-label="${row.pinned?'Unpin':'Pin'} ${escapeHTML(row.title)}" aria-pressed="${row.pinned}">${row.pinned?'◆ Pinned':'◇ Pin'}</button><button data-action="read" aria-label="${row.read?'Return to to-do':'Mark done'} ${escapeHTML(row.title)}">${row.read?'↶ To-do':'✓ Done'}</button></div></div><div class="meta"><span class="state ${escapeHTML(row.state)}">${escapeHTML(labels[row.state]||row.state)}</span><span>${escapeHTML(row.project)}</span>${row.branch?`<span>⑂ ${escapeHTML(row.branch)}</span>`:''}<time>${escapeHTML(when(row.updated_at))}</time></div><div class="snippet">${escapeHTML(row.last||'No final answer yet.')}</div><div class="row-links"><details data-expand="preview:${id}" ${expanded.has('preview:'+row.id)?'open':''}><summary>Preview</summary><pre class="answer">${escapeHTML(row.last||'No final answer yet.')}</pre></details><details data-expand="details:${id}" ${expanded.has('details:'+row.id)?'open':''}><summary>Details</summary><div class="details-body"><p>${escapeHTML(row.cwd||'No project folder')}</p>${row.state==='needs'?'<p>Answer the pending question in the original app. Done clears it from this list only.</p>':''}${row.state==='interrupted'?'<p>This turn was active before Windows last started. Open the chat to resume.</p>':''}${tokenHTML(details,row.source)}<h3>Project context</h3><button data-action="context" ${loadingContexts.has(row.id)?'disabled':''}>${loadingContexts.has(row.id)?'Loading…':contexts.has(row.id)?'Refresh branch, PR & changes':'Load branch, PR & changes'}</button>${contexts.has(row.id)?contextHTML(contexts.get(row.id)):''}</div></details></div></article>`;
+  return `<article class="row ${row.source==='Claude'?'Claude':'Codex'} ${escapeHTML(row.state)} ${row.managed_by_t3?'t3':''}" data-id="${id}" tabindex="0" aria-label="${escapeHTML(row.title)}, ${escapeHTML(labels[row.state]||row.state)}"><div class="top">${title}<div class="actions"><button class="pin-btn" data-action="pin" aria-label="${row.pinned?'Unpin':'Pin'} ${escapeHTML(row.title)}" aria-pressed="${row.pinned}">${row.pinned?'◆ Pinned':'◇ Pin'}</button><button class="done-btn${row.read?' undo':''}" data-action="read" aria-label="${row.read?'Return to to-do':'Mark done'} ${escapeHTML(row.title)}">${row.read?'↶ To-do':'<span class="check">✓</span> Done'}</button></div></div><div class="meta"><span class="state ${escapeHTML(row.state)}">${escapeHTML(labels[row.state]||row.state)}</span><span>${escapeHTML(row.project)}</span>${row.branch?`<span>⑂ ${escapeHTML(row.branch)}</span>`:''}<time>${escapeHTML(when(row.updated_at))}</time></div><div class="snippet">${escapeHTML(row.last||'No final answer yet.')}</div><div class="row-links"><details data-expand="preview:${id}" ${expanded.has('preview:'+row.id)?'open':''}><summary>Preview</summary><pre class="answer">${escapeHTML(row.last||'No final answer yet.')}</pre></details><details data-expand="details:${id}" ${expanded.has('details:'+row.id)?'open':''}><summary>Details</summary><div class="details-body"><p>${escapeHTML(row.cwd||'No project folder')}</p>${row.state==='needs'?'<p>Answer the pending question in the original app. Done clears it from this list only.</p>':''}${row.state==='interrupted'?'<p>This turn was active before Windows last started. Open the chat to resume.</p>':''}${tokenHTML(details,row.source)}<h3>Project context</h3><button data-action="context" ${loadingContexts.has(row.id)?'disabled':''}>${loadingContexts.has(row.id)?'Loading…':contexts.has(row.id)?'Refresh branch, PR & changes':'Load branch, PR & changes'}</button>${contexts.has(row.id)?contextHTML(contexts.get(row.id)):''}</div></details></div></article>`;
 }
 const RECENT_DAYS=7, RECENT_MAX=15;
 function doneHTML(row) {
   const href=row.managed_by_t3?'':safeLink(row.href), id=escapeHTML(row.id);
   const attrs=href?`href="${escapeHTML(href)}" data-action="open"`:row.source==='Claude'?'href="#" data-action="resume"':'';
   const title=attrs?`<a class="title" ${attrs} title="${escapeHTML(row.title)}">${escapeHTML(row.title)}</a>`:`<span class="title">${escapeHTML(row.title)}</span>`;
-  return `<article class="row done-row ${row.source==='Claude'?'Claude':'Codex'}" data-id="${id}" tabindex="0"><div class="top">${title}<div class="actions"><button data-action="read" aria-label="Return to to-do ${escapeHTML(row.title)}">↶ To-do</button></div></div><div class="meta"><span>${escapeHTML(row.project)}</span><time>Done ${escapeHTML(when(row.done_at))}</time></div></article>`;
+  return `<article class="row done-row ${row.source==='Claude'?'Claude':'Codex'}" data-id="${id}" tabindex="0"><div class="top">${title}<div class="actions"><button class="done-btn undo" data-action="read" aria-label="Return to to-do ${escapeHTML(row.title)}">↶ To-do</button></div></div><div class="meta"><span>${escapeHTML(row.project)}</span><time>Done ${escapeHTML(when(row.done_at))}</time></div></article>`;
 }
 function render(force=false) {
   if(!state) return;
@@ -89,7 +89,7 @@ function render(force=false) {
   document.title=(count?'('+count+') ':'')+(state.title==='Agent Manager'?'Chat inbox':state.title||'Chat inbox');
   const filtered=chats.filter(row=>(!project||row.project_key===project)&&(!query||(row.title+' '+row.project+' '+row.last).toLocaleLowerCase().includes(query.toLocaleLowerCase())));
   const rows=filtered.filter(row=>!row.managed_by_t3&&(showAll||(!row.read&&!row.automated))), t3=filtered.filter(row=>row.managed_by_t3);
-  const t3open=chats.filter(row=>row.managed_by_t3&&!row.read);
+  const t3open=state.t3?.unresolved||[];
   $('t3-section').hidden=!t3open.length; $('t3-summary').textContent=t3open.length+' unresolved T3 Code chat'+(t3open.length===1?'':'s');
   $('summary').textContent=`${rows.length} ${showAll?'saved chat':'to-do'}${rows.length===1?'':'s'} · ${state.counts.needs} need your input · ${state.counts.working} working`;
   const cutoff=Date.now()/1000-RECENT_DAYS*86400;
@@ -109,7 +109,7 @@ function render(force=false) {
   const recent=rows.filter(row=>!showAll||row.state!=='settled'||row.pinned), settled=rows.filter(row=>showAll&&row.state==='settled'&&!row.pinned);
   $('chats').innerHTML=rows.length ? groups(recent)+(settled.length?`<details class="settled" data-expand="settled" ${expanded.has('settled')||query?'open':''}><summary>Settled · ${settled.length} saved chat${settled.length===1?'':'s'}</summary>${groups(settled)}</details>`:'') : '<p class="empty">'+(query||project?'No matching chats.':showAll?'No saved chats.':'All done. New chat activity will appear here.')+'</p>';
   $('recent-list').innerHTML=recentDone.map(doneHTML).join('');
-  $('t3-chats').innerHTML=t3open.map(rowHTML).join('');
+  $('t3-chats').innerHTML=t3open.map(t=>`<article class="row t3"><div class="top"><span class="title">${escapeHTML(t.title)}</span></div><div class="meta"><time>${escapeHTML(t.updated_at?when(Date.parse(t.updated_at)/1000):'')}</time></div></article>`).join('');
   $('chat-lists').querySelectorAll('details[data-expand]').forEach(details=>details.addEventListener('toggle',()=>{if(details.open) expanded.add(details.dataset.expand); else expanded.delete(details.dataset.expand);}));
   if(focusId) { const article=$('chat-lists').querySelector(`[data-id="${CSS.escape(focusId)}"]`); const next=focusAction?article?.querySelector(`[data-action="${CSS.escape(focusAction)}"]`):article; next?.focus({preventScroll:true}); }
 }
@@ -118,9 +118,14 @@ $('chat-lists').addEventListener('click',async event=>{
   const row=state.chats.find(row=>row.id===article.dataset.id); if(!row) return;
   const action=event.target.closest('[data-action]')?.dataset.action;
   if(action==='pin') await mutate('pin',{id:row.id,pinned:!row.pinned});
-  else if(action==='read') await mutate('read',{id:row.id,read:!row.read});
-  else if(action==='resume') { event.preventDefault(); mutate('read',{id:row.id,read:true}); try { await api('resume',{id:row.id}); notice('Opening a terminal to resume this chat…'); } catch(error) { notice(error.message); } }
-  else if(action==='open'&&!row.managed_by_t3) { mutate('read',{id:row.id,read:true}); }
+  else if(action==='read') {
+    if(!row.read&&!article.classList.contains('resolving')&&!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      article.style.height=article.offsetHeight+'px'; article.classList.add('resolving');
+      await new Promise(done=>setTimeout(done,520));
+    }
+    await mutate('read',{id:row.id,read:!row.read});
+  }
+  else if(action==='resume') { event.preventDefault(); try { await api('resume',{id:row.id}); notice('Opening a terminal to resume this chat…'); } catch(error) { notice(error.message); } }
   else if(action==='context') {
     loadingContexts.add(row.id); render(true);
     try { contexts.set(row.id,await api('context?id='+encodeURIComponent(row.id))); } catch(error) { notice(error.message); }
