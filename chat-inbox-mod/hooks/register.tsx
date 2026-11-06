@@ -4,8 +4,10 @@ import type { Register } from 'claude-code'
 import type { InboxItem } from '../types'
 
 const PANE = 'chat-inbox'
-const PY = 'C:/Users/lscheibe/AppData/Local/Programs/Python/Python313/python.exe'
-const SCRIPT = 'C:/Users/lscheibe/Desktop/Chat_Inbox/inbox.py'
+const ENV = typeof process !== 'undefined' ? process.env : ({} as Record<string, string | undefined>)
+const HOME = (ENV.USERPROFILE || ENV.HOME || '').replace(/\\/g, '/')
+const PY = ENV.CHAT_INBOX_PYTHON || 'python'
+const SCRIPT = ENV.CHAT_INBOX_SCRIPT || `${HOME}/Desktop/Chat_Inbox/inbox.py`
 const items = atom({ plugin: 'chat-inbox', key: 'items' } as const, [], {
   shape: 'items-1',
 })

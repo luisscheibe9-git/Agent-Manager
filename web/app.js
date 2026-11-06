@@ -109,7 +109,8 @@ function render(force=false) {
     return result+[...map.values()].map(group=>`<h2 class="group-heading">${escapeHTML(group.label)}</h2>${group.rows.map(rowHTML).join('')}`).join('');
   }
   const recent=rows.filter(row=>!showAll||row.state!=='settled'||row.pinned), settled=rows.filter(row=>showAll&&row.state==='settled'&&!row.pinned);
-  $('chats').innerHTML=rows.length ? groups(recent)+(settled.length?`<details class="settled" data-expand="settled" ${expanded.has('settled')||query?'open':''}><summary>Settled · ${settled.length} saved chat${settled.length===1?'':'s'}</summary>${groups(settled)}</details>`:'') : '<p class="empty">'+(query||project?'No matching chats.':showAll?'No saved chats.':'All done. New chat activity will appear here.')+'</p>';
+  const working=recent.filter(row=>row.state==='working'&&!row.pinned), idle=recent.filter(row=>!(row.state==='working'&&!row.pinned));
+  $('chats').innerHTML=rows.length ? groups(idle)+(working.length?`<h2 class="group-heading">Working · ${working.length}</h2>`+working.map(rowHTML).join(''):'')+(settled.length?`<details class="settled" data-expand="settled" ${expanded.has('settled')||query?'open':''}><summary>Settled · ${settled.length} saved chat${settled.length===1?'':'s'}</summary>${groups(settled)}</details>`:'') : '<p class="empty">'+(query||project?'No matching chats.':showAll?'No saved chats.':'All done. New chat activity will appear here.')+'</p>';
   $('recent-list').innerHTML=recentDone.map(doneHTML).join('');
   $('t3-chats').innerHTML=t3open.map(t=>`<article class="row t3"><div class="top"><span class="title">${escapeHTML(t.title)}</span></div><div class="meta"><time>${escapeHTML(t.updated_at?when(Date.parse(t.updated_at)/1000):'')}</time></div></article>`).join('');
   $('chat-lists').querySelectorAll('details[data-expand]').forEach(details=>details.addEventListener('toggle',()=>{if(details.open) expanded.add(details.dataset.expand); else expanded.delete(details.dataset.expand);}));
