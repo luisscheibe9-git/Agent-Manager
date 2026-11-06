@@ -102,6 +102,17 @@ def _patch(sid, **fields):
     data["counts"] = counts(data["chats"])
 
 
+WEB = Path(__file__).resolve().parent / "web"
+
+
+def web_build():
+    """Changes whenever the page files change, so an open window can reload itself."""
+    try:
+        return max(f.stat().st_mtime_ns for f in WEB.iterdir())
+    except OSError:
+        return 0
+
+
 def freeze_focus_reads():
     """One-time: keep chats that only counted as read because you focused them in the Claude app."""
     with Catalog(inbox.CATALOG) as db:
@@ -166,13 +177,11 @@ def snapshot():
     rows.sort(key=lambda r: (not r["pinned"], -r["updated_at"]))
     return {"chats": rows, "counts": counts(rows),
             "t3": {"status": t3["status"], "reason": t3["reason"], "unresolved": t3.get("unresolved", [])},
-            "settings": prefs, "updated_at": time.time(), "version": 2,
+            "settings": prefs, "updated_at": time.time(), "version": 2, "build": web_build(),
             "title": os.environ.get("AGENT_MANAGER_LABEL", "Agent Manager")}
 
 
 def action(name, body):
-    if name == "resume":
-        return resume(body.get("id"))
     if name in ("settings", "hook"):
         with inbox.DATA_LOCK:
             return update_settings(body) if name == "settings" else hook(body)
@@ -199,19 +208,6 @@ def _writer():
 def flush():
     """Wait for queued clicks to reach disk (called before the app exits)."""
     _QUEUE.join()
-
-
-def resume(sid):
-    """Open a terminal running `claude --resume` for a Claude chat that has no app deep link."""
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,150}", str(sid)):
-        raise ValueError("Invalid chat id")
-    row = next((r for r in cached_snapshot()["chats"] if r["id"] == sid), None)
-    if row is None or row["source"] != "Claude":
-        raise ValueError("Only Claude chats can be resumed in a terminal")
-    cwd = row["cwd"] if os.path.isdir(row["cwd"] or "") else inbox.HOME
-    subprocess.Popen(["powershell", "-NoExit", "-Command", f"claude --resume {sid}"],
-                     cwd=cwd, creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
-    return {"ok": True}
 
 
 def _preview(name, body, rows, sid):

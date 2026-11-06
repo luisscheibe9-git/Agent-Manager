@@ -6,7 +6,7 @@ const labels = {needs:'Needs your input',working:'Working',unread:'Unread',read:
 const number = value => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString() : '—';
 const when = timestamp => new Date(timestamp*1000).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
 // Always open on the complete to-do list, never an old search or recovery view.
-let state, query='', project='', showAll=false, rendered='', noticeTimer, refreshNumber=0;
+let build=0, state, query='', project='', showAll=false, rendered='', noticeTimer, refreshNumber=0;
 const expanded = new Set(), contexts = new Map(), loadingContexts = new Set();
 function notice(message) { clearTimeout(noticeTimer); $('notice').textContent=message; $('notice').hidden=false; noticeTimer=setTimeout(()=>$('notice').hidden=true,5000); }
 async function api(path,body) {
@@ -39,6 +39,8 @@ async function refresh() {
   const request=++refreshNumber;
   try {
     const data=await api('state'); if(request!==refreshNumber) return;
+    if(data.build&&build&&data.build!==build) { location.reload(); return; }
+    build=data.build||build;
     for(const [key,p] of pending) { if(Date.now()>p.until) { pending.delete(key); continue; } const row=data.chats.find(r=>r.id===p.id); if(row) Object.assign(row,p.fields); }
     if(pending.size) { state=data; applyLocal(); } else state=data;
     $('connection-error').hidden=true; $('connection').textContent='Saved locally · '+new Date(data.updated_at*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
@@ -65,13 +67,13 @@ function contextHTML(context) {
 }
 function rowHTML(row) {
   const id=escapeHTML(row.id), href=row.managed_by_t3?'':safeLink(row.href), details=row.details||{};
-  const title=href ? `<a class="title" href="${escapeHTML(href)}" title="${escapeHTML(row.title)}" data-action="open">${escapeHTML(row.title)}</a>` : (row.source==='Claude'&&!row.managed_by_t3 ? `<a class="title" href="#" title="No app link for this chat. Click to resume it in a terminal." data-action="resume">${escapeHTML(row.title)}</a>` : `<span class="title" title="${escapeHTML(row.title)}">${escapeHTML(row.title)}</span>`);
+  const title=href ? `<a class="title" href="${escapeHTML(href)}" title="${escapeHTML(row.title)}" data-action="open">${escapeHTML(row.title)}</a>` : `<span class="title" title="${escapeHTML(row.title)}">${escapeHTML(row.title)}</span>`;
   return `<article class="row ${row.source==='Claude'?'Claude':'Codex'} ${escapeHTML(row.state)} ${row.managed_by_t3?'t3':''}" data-id="${id}" tabindex="0" aria-label="${escapeHTML(row.title)}, ${escapeHTML(labels[row.state]||row.state)}"><div class="top">${title}<div class="actions"><button class="pin-btn" data-action="pin" aria-label="${row.pinned?'Unpin':'Pin'} ${escapeHTML(row.title)}" aria-pressed="${row.pinned}">${row.pinned?'◆ Pinned':'◇ Pin'}</button><button class="done-btn${row.read?' undo':''}" data-action="read" aria-label="${row.read?'Return to to-do':'Mark done'} ${escapeHTML(row.title)}">${row.read?'↶ To-do':'<span class="check">✓</span> Done'}</button></div></div><div class="meta"><span class="state ${escapeHTML(row.state)}">${escapeHTML(labels[row.state]||row.state)}</span><span>${escapeHTML(row.project)}</span>${row.branch?`<span>⑂ ${escapeHTML(row.branch)}</span>`:''}<time>${escapeHTML(when(row.updated_at))}</time></div><div class="snippet">${escapeHTML(row.last||'No final answer yet.')}</div><div class="row-links"><details data-expand="preview:${id}" ${expanded.has('preview:'+row.id)?'open':''}><summary>Preview</summary><pre class="answer">${escapeHTML(row.last||'No final answer yet.')}</pre></details><details data-expand="details:${id}" ${expanded.has('details:'+row.id)?'open':''}><summary>Details</summary><div class="details-body"><p>${escapeHTML(row.cwd||'No project folder')}</p>${row.state==='needs'?'<p>Answer the pending question in the original app. Done clears it from this list only.</p>':''}${row.state==='interrupted'?'<p>This turn was active before Windows last started. Open the chat to resume.</p>':''}${tokenHTML(details,row.source)}<h3>Project context</h3><button data-action="context" ${loadingContexts.has(row.id)?'disabled':''}>${loadingContexts.has(row.id)?'Loading…':contexts.has(row.id)?'Refresh branch, PR & changes':'Load branch, PR & changes'}</button>${contexts.has(row.id)?contextHTML(contexts.get(row.id)):''}</div></details></div></article>`;
 }
 const RECENT_DAYS=7, RECENT_MAX=15;
 function doneHTML(row) {
   const href=row.managed_by_t3?'':safeLink(row.href), id=escapeHTML(row.id);
-  const attrs=href?`href="${escapeHTML(href)}" data-action="open"`:row.source==='Claude'?'href="#" data-action="resume"':'';
+  const attrs=href?`href="${escapeHTML(href)}" data-action="open"`:'';
   const title=attrs?`<a class="title" ${attrs} title="${escapeHTML(row.title)}">${escapeHTML(row.title)}</a>`:`<span class="title">${escapeHTML(row.title)}</span>`;
   return `<article class="row done-row ${row.source==='Claude'?'Claude':'Codex'}" data-id="${id}" tabindex="0"><div class="top">${title}<div class="actions"><button class="done-btn undo" data-action="read" aria-label="Return to to-do ${escapeHTML(row.title)}">↶ To-do</button></div></div><div class="meta"><span>${escapeHTML(row.project)}</span><time>Done ${escapeHTML(when(row.done_at))}</time></div></article>`;
 }
@@ -125,7 +127,6 @@ $('chat-lists').addEventListener('click',async event=>{
     }
     await mutate('read',{id:row.id,read:!row.read});
   }
-  else if(action==='resume') { event.preventDefault(); try { await api('resume',{id:row.id}); notice('Opening a terminal to resume this chat…'); } catch(error) { notice(error.message); } }
   else if(action==='context') {
     loadingContexts.add(row.id); render(true);
     try { contexts.set(row.id,await api('context?id='+encodeURIComponent(row.id))); } catch(error) { notice(error.message); }

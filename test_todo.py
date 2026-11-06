@@ -116,19 +116,6 @@ class TodoTests(unittest.TestCase):
         self.assertEqual(inbox.clean_title('# Files mentioned by the user:\n\n## WSR.docx: C:/x'), '(attachment) WSR.docx')
         self.assertEqual(inbox.clean_title('quick rundown <t3_context version="1"> <context'), 'quick rundown')
 
-    def test_resume_opens_terminal_only_for_valid_claude_chat(self):
-        self.fixture()
-        with patch.object(dashboard.subprocess, 'Popen') as popen:
-            with self.assertRaises(ValueError):
-                dashboard.action('resume', {'id': 'x; calc'})
-            row = dashboard.snapshot()['chats'][0]
-            if row['source'] == 'Claude':
-                dashboard.action('resume', {'id': row['id']})
-                self.assertIn(f"claude --resume {row['id']}", popen.call_args[0][0][-1])
-            else:
-                with self.assertRaises(ValueError):
-                    dashboard.action('resume', {'id': row['id']})
-
 
 if __name__ == '__main__':
     unittest.main()
