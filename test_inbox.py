@@ -64,6 +64,57 @@ class InboxTests(unittest.TestCase):
         self.assertEqual(inbox.item_state(SID, row[4], row[6]), "done")
         self.assertEqual(inbox.HREFS[SID], "codex://threads/" + SID)
 
+    def test_claude_transcript_beyond_windows_max_path_is_scanned(self):
+        sid = "11111111-2222-3333-4444-555555555555"
+        # Like Claude's scratch-chat folders: the folder fits under MAX_PATH, folder + file name does not.
+        base = os.path.join(str(self.root), ".claude", "projects")
+        folder = os.path.join(base, "C--scratch-" + "x" * (230 - len(base)))
+        path = os.path.join(folder, sid + ".jsonl")
+        self.assertLess(len(folder), 248)
+        self.assertGreaterEqual(len(path), 260)
+        os.makedirs(folder)
+        self.addCleanup(lambda: os.path.exists(inbox.lp(path)) and os.remove(inbox.lp(path)))
+        with open(inbox.lp(path), "w", encoding="utf8") as f:
+            f.write(json.dumps({"type": "user", "cwd": "C:/scratch",
+                                "message": {"content": "Long path fixture"}}) + "\n")
+        rows = inbox.scan_claude(0)
+        self.assertEqual([r[1] for r in rows], [sid])
+        self.assertEqual(rows[0][2], "Long path fixture")
+
+    def claude_chat(self, sid, text, mtime):
+        path = self.root / ".claude/projects/C--proj" / (sid + ".jsonl")
+        self.write_events(path, [{"type": "user", "cwd": "C:/proj", "message": {"content": text}},
+                                 {"type": "assistant", "message": {"content": "Answer " + text}}])
+        os.utime(path, (mtime, mtime))
+
+    def test_cleared_transcripts_of_a_desktop_chat_are_hidden(self):
+        old, cur = "aaaaaaaa-0000-0000-0000-000000000001", "aaaaaaaa-0000-0000-0000-000000000002"
+        now = time.time()
+        self.claude_chat(old, "Before clear", now - 100)
+        self.claude_chat(cur, "After clear", now - 10)
+        meta = self.root / "AppData/Roaming/Claude/claude-code-sessions/x/local_s1.json"
+        meta.parent.mkdir(parents=True)
+        meta.write_text(json.dumps({"sessionId": "local_s1", "cliSessionId": cur,
+                                    "priorCliSessionIds": [old]}), encoding="utf8")
+        self.assertEqual([r[1] for r in inbox.collect_sessions()], [cur])
+
+    def test_chat_found_late_is_baselined_read_but_new_chat_is_not(self):
+        now = time.time()
+        self.claude_chat("bbbbbbbb-0000-0000-0000-000000000001", "Known", now - 5000)
+        inbox.collect_sessions()  # app has run: catalog and last scan time exist
+        inbox.save_state({})
+        from catalog import Catalog
+        with Catalog(inbox.CATALOG) as db:
+            db.set("last_scan_at", now - 1000)  # the app last scanned a while ago
+        hidden_old = "bbbbbbbb-0000-0000-0000-000000000002"
+        fresh = "bbbbbbbb-0000-0000-0000-000000000003"
+        self.claude_chat(hidden_old, "Old but newly readable", now - 3000)
+        self.claude_chat(fresh, "Made while app was off", now - 100)
+        inbox.collect_sessions()
+        state = inbox.load_state()
+        self.assertIn(hidden_old, state)
+        self.assertNotIn(fresh, state)
+
     def test_active_commentary_is_not_a_finished_answer(self):
         self.write_events(self.log, self.codex_rows(complete=False))
         row, = inbox.collect_sessions()

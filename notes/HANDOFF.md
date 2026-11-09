@@ -10,7 +10,7 @@ Repo: https://github.com/luisscheibe9-git/Agent-Manager (PUBLIC since 2026-11-05
 ## How to run, restart, test
 - Python: `%USERPROFILE%\AppData\Local\Programs\Python\Python313\python.exe` (`pythonw.exe` for the tray). Plain `python` may not be on PATH in PowerShell.
 - The app starts at sign-in from Task Scheduler task **Chat Inbox** (logon trigger plus a 5-minute repeat, IgnoreNew) running `pythonw tray.py`. Restart: kill `pythonw.exe` processes whose command line contains `Chat_Inbox`, wait 2 s, `Start-ScheduledTask 'Chat Inbox'`, wait about 30 s (first scan re-parses logs). Check `http://127.0.0.1:8765/api/state`.
-- Tests: `python -X utf8 -m unittest test_inbox test_dashboard test_todo test_t3_sessions test_black_launcher` (54 pass). Windows temp-file cleanup occasionally makes one test flake; rerun.
+- Tests: `python -X utf8 -m unittest test_inbox test_dashboard test_todo test_t3_sessions test_black_launcher` (57 pass). Windows temp-file cleanup occasionally makes one test flake; rerun.
 - JS check: `node --check web/app.js`.
 - Page files in `web/` are served fresh; `/api/state` returns a `build` id and open windows reload themselves when it changes (a window opened before that feature needs one Ctrl+R).
 - Verify UI in the Browser pane at `http://localhost:8765`. **Never click Done / Snooze / reorder on the real list while testing** (an earlier test woke a snoozed chat of Luis's). For mutation tests run a copy: copy `chat_catalog.sqlite3*`, `read_state.json`, `pins.json` to a temp dir, then `AGENT_MANAGER_DATA_DIR=<dir> AGENT_MANAGER_PORT=8791 python inbox.py --no-browser` and use `localhost:8791`. If you must touch real data through the API, undo it afterwards.
@@ -37,10 +37,18 @@ Repo: https://github.com/luisscheibe9-git/Agent-Manager (PUBLIC since 2026-11-05
 ## Done in this project (high level)
 Tray badge, hooks-based working/needs state, reminders, projects, tokens and context, T3 separation, speed (background scan cache + optimistic UI), single window at startup, only-Done resolve, Recently done, scheduled chats hidden, usage chips with calibrated limit, ideas, flat reorderable list with project hues, public repo with scrubbed history.
 
+## 2026-11-08 missing chats and post-reboot flood
+- Cause of a missing chat: Windows MAX_PATH. Claude scratch-chat project folders are ~220 chars, so `<folder>\<uuid>.jsonl` hits 261 and `os.stat`/`open` fail. All transcript stat/open go through `inbox.lp()`. Folder paths themselves are still under 248, so `glob` works; if Claude ever makes deeper folders, glob would need the prefix too.
+- "Clear" in the Claude app starts a new CLI transcript in the same desktop session; the old ids go in `priorCliSessionIds`. Those are hidden (`SUPERSEDED`), never if they are some chat's current id.
+- Late-discovered chats: `collect_sessions` stores `last_scan_at` (at most once a minute); a never-seen chat whose activity is older than that minus `LATE_MARGIN` (600 s) gets a read_state baseline. New chats made while the app was off still appear. Codex threads synced in from elsewhere with old timestamps would also be baselined (accepted).
+- The flood Luis saw (19 after reboot, ~5 expected) came from fix (1) going live on reboot before (2)/(3) existed. `tools/baseline_read.py` (dry run unless `--apply`; stop the app first) marked the 5 old ones read; backup of the previous file at `%TEMP%
+ead_state.before-baseline.json` (temporary).
+- Reboot: task "Chat Inbox" logon trigger worked on 2026-11-08 (logon 15:36:19, server 15:36:27). Done writes both a decision and read_state, so the working -> interrupted state flip after a reboot does not resurrect done chats (simulated with `boot_time` patched: same 10 to-dos).
+
 ## Open items and ideas (not built)
 - Cloud or phone view of the list (paused; hosting and access undecided); cloud and remote sessions.
 - Rust/Tauri packaging (not needed for speed).
-- Reboot test (tray, badge, pins, done state, hues, order) never performed.
+- Reboot: startup and done-state persistence verified 2026-11-08 (see above); tray badge pixels and window position after reboot not checked.
 - Verify in the real apps: new-chat deep links with prefill, taskbar badge, toasts; verify Claude counts against the Claude sidebar.
 - No known deep link to open a T3 chat.
 - Google Keep sync: parked (only Google Tasks is a clean API; nothing is frictionless).

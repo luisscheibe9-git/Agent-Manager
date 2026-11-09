@@ -73,10 +73,18 @@ def read_json(path, default):
     return default
 
 
+def lp(path):
+    """Windows extended-length path for paths over MAX_PATH (260). Claude's project folders for
+    scratch chats are long enough that their transcripts otherwise can't be opened or stat'ed."""
+    if os.name == "nt" and len(path) >= 248 and not path.startswith("\\\\"):
+        return "\\\\?\\" + os.path.abspath(path)
+    return path
+
+
 def safe_lines(path):
     """Yield a file's lines; a file that vanishes or is locked just ends early."""
     try:
-        with open(path, encoding="utf8", errors="replace") as f:
+        with open(lp(path), encoding="utf8", errors="replace") as f:
             for line in f:
                 yield line
     except OSError:
@@ -162,7 +170,7 @@ def scan_claude(cutoff, catalog=None):
     out = []
     for p in glob.glob(os.path.join(HOME, ".claude", "projects", "*", "*.jsonl")):
         try:
-            stat = os.stat(p)
+            stat = os.stat(lp(p))
             mt = stat.st_mtime
         except OSError:  # path too long on Windows
             continue
@@ -224,7 +232,7 @@ def scan_codex(cutoff, catalog=None, metadata=None):
     out = []
     for p in glob.glob(os.path.join(HOME, ".codex", "sessions", "**", "*.jsonl"), recursive=True):
         try:
-            stat = os.stat(p)
+            stat = os.stat(lp(p))
             mt = stat.st_mtime
         except OSError:  # path too long on Windows
             continue
@@ -300,10 +308,26 @@ def collect_sessions():
     metadata = codex_metadata()
     hidden = {sid for sid, meta in META.items() if meta.get("isArchived")}
     hidden.update(sid for sid, meta in metadata.items() if meta.get("archived"))
+    started = time.time()
     with Catalog(CATALOG) as catalog:
         previous = {record["item"][1]: record for record in catalog.records()}
+        last_scan = catalog.get("last_scan_at", 0)
         items = scan_claude(0, catalog) + scan_codex(0, catalog, metadata)
+        items = [item for item in items if item[1] not in SUPERSEDED]
         live = {item[1] for item in items}
+        # A chat seen for the first time whose activity predates the last scan existed while the app
+        # was watching but could not be read (e.g. a path that was too long). Baseline it as read so a
+        # scanner fix or new source does not flood the to-do list with old chats; new chats still appear.
+        late = {item[1]: item[4] for item in items
+                if previous and last_scan and item[1] not in previous and item[4] < last_scan - LATE_MARGIN}
+        if late:
+            state = read_json(STATE, None)
+            if state is not None:
+                for sid, mt in late.items():
+                    state[sid] = max(state.get(sid, 0), mt)
+                save_state(state)
+        if started - last_scan > 60:
+            catalog.set("last_scan_at", started)
         for item in items:
             src, sid = item[:2]
             source_meta = metadata.get(sid, {}) if src == "Codex" else META.get(sid, {})
@@ -330,7 +354,8 @@ def collect_sessions():
             HOOKS[sid] = hook
             NEEDS[sid] = hook["state"] == "needs"
             RUNNING[sid] = hook["state"] == "working"
-    return sorted((tuple(r["item"]) for r in saved if not r.get("hidden")), key=lambda x: -x[4])
+    return sorted((tuple(r["item"]) for r in saved if not r.get("hidden") and r["item"][1] not in SUPERSEDED),
+                  key=lambda x: -x[4])
 
 
 def item_state(sid, mt, role, pinned=False):
@@ -434,6 +459,8 @@ RUNNING = {}  # session id -> explicit Codex task lifecycle, or None for old log
 HREFS = {}  # last known deep link, retained even when the source file disappears
 DETAILS = {}
 HOOKS = {}
+SUPERSEDED = set()  # earlier CLI transcripts of a desktop chat that was cleared (/clear): not separate chats
+LATE_MARGIN = 600   # seconds; see collect_sessions
 
 
 def claude_links():
@@ -444,6 +471,7 @@ def claude_links():
     RUNNING.clear()
     DETAILS.clear()
     HOOKS.clear()
+    SUPERSEDED.clear()
     roots = [
         os.path.join(HOME, "AppData", "Local", "Claude-Data", "*"),
         os.path.join(HOME, "AppData", "Roaming", "Claude"),
@@ -452,12 +480,14 @@ def claude_links():
     paths = {p for root in roots for p in glob.glob(os.path.join(root, "claude-code-sessions", "**", "local_*.json"), recursive=True)}
     for p in sorted(paths):
         try:
-            with open(p, encoding="utf8") as f:
+            with open(lp(p), encoding="utf8") as f:
                 o = json.load(f)
             m[o["cliSessionId"]] = o["sessionId"]
             META[o["cliSessionId"]] = o
+            SUPERSEDED.update(x for x in o.get("priorCliSessionIds") or [] if isinstance(x, str))
         except (OSError, ValueError, KeyError):
             pass
+    SUPERSEDED.difference_update(META)  # never hide a transcript that is some chat's current one
     return m
 
 
