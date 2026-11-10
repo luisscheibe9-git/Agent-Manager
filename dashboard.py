@@ -156,33 +156,46 @@ def context_window(details):
     return 200_000
 
 
-HUES = list(range(0, 360, 15))
+# Twelve hues around the rainbow, spaced by eye rather than by degrees (HSL greens and blues are wide):
+# red, orange, yellow, lime, green, teal, cyan, blue, indigo, violet, magenta, pink.
+HUES = [0, 28, 50, 80, 130, 165, 188, 212, 238, 266, 295, 328]
 
 
 def _gap(a, b):
-    return min(abs(a - b), 360 - abs(a - b))
+    """Distance between two palette hues in palette steps around the color wheel."""
+    i, j = HUES.index(a), HUES.index(b)
+    return min(abs(i - j), len(HUES) - abs(i - j))
 
 
-def project_hues(keys):
-    """One saved hue per project: same project, same color, kept across restarts.
+def project_hues(keys, visible=()):
+    """One saved hue per project, kept across restarts, but never shared on the to-do list.
 
-    New projects (given most recent first) get the unused hue farthest from the hues already in use, so the
-    projects you are working in look clearly different."""
+    `visible` lists the to-do projects, most recent first. Each keeps its saved hue unless a more
+    recent visible project already has it; then it gets the free hue farthest from those in use. Up to
+    12 to-do projects therefore always have different colors. Other projects keep their saved hue."""
     with Catalog(inbox.CATALOG) as db:
         saved = db.get("project_colors", {})
-        missing = [k for k in dict.fromkeys(keys) if k not in saved]
-        for key in missing:
-            counts_by_hue = {}
-            for hue in saved.values():
-                counts_by_hue[hue] = counts_by_hue.get(hue, 0) + 1
-            free = [h for h in HUES if h not in counts_by_hue]
-            if not free:
-                saved[key] = min(HUES, key=lambda h: counts_by_hue[h])
-            elif not counts_by_hue:
-                saved[key] = HUES[sum(map(ord, key)) % len(HUES)]
-            else:
-                saved[key] = max(free, key=lambda h: min(_gap(h, u) for u in counts_by_hue))
-        if missing:
+        before = dict(saved)
+        taken = {}
+        for key in dict.fromkeys(visible):
+            hue = saved.get(key)
+            if hue not in HUES or hue in taken:
+                free = [h for h in HUES if h not in taken]
+                if not free:
+                    hue = min(HUES, key=lambda h: taken[h])
+                elif not taken:
+                    hue = hue if hue in HUES else HUES[sum(map(ord, key)) % len(HUES)]
+                else:
+                    hue = max(free, key=lambda h: (min(_gap(h, u) for u in taken), -HUES.index(h)))
+            taken[hue] = taken.get(hue, 0) + 1
+            saved[key] = hue
+        for key in dict.fromkeys(keys):
+            if saved.get(key) not in HUES:  # new or from the old 24-hue palette: spread by usage
+                used = {}
+                for h in saved.values():
+                    used[h] = used.get(h, 0) + 1
+                saved[key] = min(HUES, key=lambda h: (used.get(h, 0), HUES.index(h)))
+        if saved != before:
             db.set("project_colors", saved)
     return saved
 
@@ -219,7 +232,6 @@ def snapshot():
         snoozes = db.get("snoozes", {})
         order_list = db.get("chat_order", [])
     positions = {sid: n for n, sid in enumerate(order_list)}
-    hues = project_hues([os.path.normcase((item[3] or "").rstrip("/\\")) or "__none__" for item in items])
     t3 = t3_sessions.scan(inbox.HOME)
     rows = []
     for source, sid, title, cwd, mt, last, role in items:
@@ -251,11 +263,15 @@ def snapshot():
                      "state": state, "read": is_read, "pinned": sid in pins,
                      "done_at": decision.get("done_at", 0) if is_read else 0,
                      "order": positions.get(sid, -1),
-                     "hue": hues.get(os.path.normcase(folder) or "__none__", 0),
                      "snoozed_until": snoozes.get(sid, 0) if snoozes.get(sid, 0) > time.time() else 0,
                      "archived": sid in archived, "href": inbox.HREFS.get(sid, ""),
                      "branch": extra.get("branch", ""), "details": extra,
                      "attention": attention, "automated": bool(extra.get("automated")), "managed_by_t3": (source, sid) in t3["sessions"] or bool(T3_PATH.search(cwd or ""))})
+    on_list = [r["project_key"] for r in sorted(rows, key=lambda r: -r["updated_at"])
+               if not (r["read"] or r["archived"] or r["managed_by_t3"] or r["automated"])]
+    hues = project_hues([r["project_key"] for r in rows], on_list)
+    for r in rows:
+        r["hue"] = hues.get(r["project_key"], 0)
     now = time.time()
     estimates = {source: five_hour_limit([r for r in rows if r["source"] == source], prefs["five_hour_limit_tokens"])
                  for source in ("Claude", "Codex")}

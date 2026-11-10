@@ -185,12 +185,12 @@ nav{align-items:center}
 .row.drop-after{box-shadow:0 2px 0 var(--blue)}
 
 /* each project gets its own quiet hue (saved on the server) */
-.row.hued{--card:hsl(var(--hue) 26% 11%);border-color:hsl(var(--hue) 30% 19%)}
-.row.hued:hover{--card:hsl(var(--hue) 26% 14%);border-color:hsl(var(--hue) 34% 28%)}
-.row.hued.needs{--card:color-mix(in srgb,#ff453a 10%,hsl(var(--hue) 26% 11%));border-color:rgba(255,69,58,.34)}
-.row.hued.needs:hover{--card:color-mix(in srgb,#ff453a 13%,hsl(var(--hue) 26% 14%))}
-.row.hued.working{--card:color-mix(in srgb,#30d158 9%,hsl(var(--hue) 26% 11%));border-color:rgba(48,209,88,.3)}
-.row.hued.working:hover{--card:color-mix(in srgb,#30d158 12%,hsl(var(--hue) 26% 14%))}
-.row-project{color:hsl(var(--hue) 55% 68%)}
+.row.hued{--card:hsl(var(--hue) 40% 11%);border-color:hsl(var(--hue) 45% 22%)}
+.row.hued:hover{--card:hsl(var(--hue) 40% 14%);border-color:hsl(var(--hue) 50% 32%)}
+.row.hued.needs{--card:color-mix(in srgb,#ff453a 10%,hsl(var(--hue) 40% 11%));border-color:rgba(255,69,58,.34)}
+.row.hued.needs:hover{--card:color-mix(in srgb,#ff453a 13%,hsl(var(--hue) 40% 14%))}
+.row.hued.working{--card:color-mix(in srgb,#30d158 9%,hsl(var(--hue) 40% 11%));border-color:rgba(48,209,88,.3)}
+.row.hued.working:hover{--card:color-mix(in srgb,#30d158 12%,hsl(var(--hue) 40% 14%))}
+.row-project{color:hsl(var(--hue) 75% 66%)}
 .down-btn{height:42px;width:46px;padding:0;font-size:19px;line-height:1;color:var(--muted);background:transparent}
 .down-btn:hover{color:var(--fg)}

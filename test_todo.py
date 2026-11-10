@@ -204,12 +204,23 @@ class TodoTests(unittest.TestCase):
 
 
     def test_each_project_keeps_one_saved_hue(self):
-        first = dashboard.project_hues(['alpha', 'beta', '__none__'])
-        self.assertEqual(len(set(first.values())), 3)
-        self.assertGreaterEqual(min(dashboard._gap(x, y) for x in first.values() for y in first.values() if x != y), 60)
-        again = dashboard.project_hues(['alpha', 'gamma'])
+        first = dashboard.project_hues(['alpha', 'beta', '__none__'], ['alpha', 'beta', '__none__'])
+        self.assertEqual(len({first[k] for k in ('alpha', 'beta', '__none__')}), 3)
+        self.assertGreaterEqual(min(dashboard._gap(first[x], first[y]) for x in ('alpha', 'beta', '__none__')
+                                    for y in ('alpha', 'beta', '__none__') if x != y), 3)  # 12 hues: >= 3 steps (90 degrees) apart
+        again = dashboard.project_hues(['alpha', 'gamma'], ['alpha', 'gamma'])
         self.assertEqual(again['alpha'], first['alpha'])  # saved, so it never changes
-        self.assertNotIn(again['gamma'], first.values())
+        self.assertNotEqual(again['gamma'], again['alpha'])
+
+    def test_to_do_projects_never_share_a_hue_and_cover_the_rainbow(self):
+        from catalog import Catalog
+        keys = ['p%d' % n for n in range(12)]
+        with Catalog(inbox.CATALOG) as db:  # old palette: everything crowded into the greens
+            db.set('project_colors', {k: 105 + 15 * (n % 4) for n, k in enumerate(keys)})
+        hues = dashboard.project_hues(keys, keys)
+        self.assertEqual(sorted(hues[k] for k in keys), sorted(dashboard.HUES))
+        again = dashboard.project_hues(keys, keys)
+        self.assertEqual(again, hues)  # stable once assigned
 
 
 if __name__ == '__main__':
